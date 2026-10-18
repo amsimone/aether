@@ -141,6 +141,8 @@ dependencies = [
  "rocket-aero",
  "rocket-core",
  "rocket-motors",
+ "rocket-physics",
+ "rocket-sim",
  "serde_json",
 ]
 
