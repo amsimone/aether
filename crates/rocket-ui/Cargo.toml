@@ -11,5 +11,9 @@ repository.workspace = true
 name = "aether-ui"
 path = "src/main.rs"
 
+[dependencies]
+eframe = "0.37"
+bytemuck = { version = "1", features = ["derive"] }
+
 [lints]
 workspace = true
