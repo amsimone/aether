@@ -268,6 +268,8 @@ impl AetherApp {
 
     fn show_status_bar(&self, ui: &mut egui::Ui) {
         let mp = self.rocket.mass_properties();
+        let aero = rocket_aero::estimate(&self.rocket);
+        let sm = rocket_aero::static_margin(&self.rocket);
         let component_count = self.rocket.root.components.len();
 
         ui.horizontal(|ui| {
@@ -280,10 +282,28 @@ impl AetherApp {
             ui.separator();
             ui.label(format!(" CG: {:.1} mm ", mp.cg_x.as_millimeters()));
             ui.separator();
-            ui.label(
-                egui::RichText::new(" CP: pending (Task 1.5) ")
-                    .color(egui::Color32::from_rgb(0xf0, 0xa0, 0x20)),
-            );
+            if aero.cn_alpha.abs() > 1e-9 {
+                ui.label(format!(" CP: {:.1} mm ", aero.cp_x * 1000.0));
+                ui.separator();
+                if sm.is_finite() {
+                    let sm_color = if sm >= 1.0 {
+                        egui::Color32::from_rgb(0x40, 0xc0, 0x60)
+                    } else if sm >= 0.0 {
+                        egui::Color32::from_rgb(0xf0, 0xa0, 0x20)
+                    } else {
+                        egui::Color32::from_rgb(0xe5, 0x48, 0x4d)
+                    };
+                    ui.label(
+                        egui::RichText::new(format!(" SM: {:+.1} cal ", sm))
+                            .strong()
+                            .color(sm_color),
+                    );
+                }
+            } else {
+                ui.label(
+                    egui::RichText::new(" CP: — (no fins) ").color(egui::Color32::from_gray(120)),
+                );
+            }
             ui.separator();
             if let Some(path) = &self.file_path {
                 ui.label(format!(" {} ", path.display()));

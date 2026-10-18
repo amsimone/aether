@@ -22,6 +22,7 @@
 )]
 
 use eframe::egui;
+use rocket_aero::{estimate, static_margin};
 
 use crate::app::AetherApp;
 
@@ -31,12 +32,17 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 
     let mp = app.rocket.mass_properties();
+    let aero = estimate(&app.rocket);
+    let sm = static_margin(&app.rocket);
     let rocket_length = app.rocket.root.length().as_millimeters().max(1.0);
     let cg_mm = mp.cg_x.as_millimeters();
 
-    // CP is not yet computed (Task 1.5); show a placeholder.
-    // For now, we display the CG position and a "CP pending" note.
-    let cp_mm: Option<f64> = None;
+    // CP is now computed by the design-time aero estimate.
+    let cp_mm = if aero.cn_alpha.abs() > 1e-9 {
+        Some(aero.cp_x * 1000.0)
+    } else {
+        None
+    };
 
     // Mass readouts.
     ui.horizontal(|ui| {
@@ -63,6 +69,20 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
         ui.label(format!("{:.4} kg·m²", mp.i_transverse));
     });
 
+    ui.add_space(4.0);
+
+    ui.horizontal(|ui| {
+        ui.label("C_Nα:");
+        ui.label(format!("{:.2} /rad", aero.cn_alpha));
+    });
+
+    if let Some(cp) = cp_mm {
+        ui.horizontal(|ui| {
+            ui.label("CP (from nose):");
+            ui.label(format!("{:.1} mm", cp));
+        });
+    }
+
     ui.add_space(8.0);
 
     // The gauge: a horizontal bar showing the rocket body with CG/CP markers.
@@ -80,6 +100,7 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
 
     // Draw the rocket body bar.
     painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(0x30, 0x35, 0x40));
+
     // Draw the border as a filled rect slightly larger than the bar.
     let border_rect = egui::Rect::from_min_size(
         egui::pos2(
@@ -89,6 +110,8 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
         egui::Vec2::new(bar_rect.width() + 2.0, bar_height + 2.0),
     );
     painter.rect_filled(border_rect, 2.0, egui::Color32::from_gray(100));
+    // Re-draw the inner bar on top.
+    painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(0x30, 0x35, 0x40));
 
     // Tick marks every 25% of the rocket length.
     for i in 1..4 {
@@ -118,7 +141,7 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
         egui::Color32::from_rgb(0x4a, 0xa8, 0xff),
     );
 
-    // CP marker (orange diamond) — only if computed.
+    // CP marker (orange diamond) — now computed!
     if let Some(cp) = cp_mm {
         let cp_x = bar_rect.left() + (cp as f32 / rocket_length as f32) * bar_rect.width();
         let cp_y = bar_rect.center().y;
@@ -144,55 +167,49 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
         );
 
         // Stability margin in calibers.
-        let ref_diameter = app
-            .rocket
-            .root
-            .iter()
-            .filter_map(|c| match c {
-                rocket_core::Component::BodyTube(bt) => Some(bt.outer_diameter.as_millimeters()),
-                rocket_core::Component::NoseCone(nc) => Some(nc.base_diameter.as_millimeters()),
-                _ => None,
-            })
-            .next()
-            .unwrap_or(25.0);
-        let sm = (cp - cg_mm) / ref_diameter;
+        if sm.is_finite() {
+            let (sm_color, sm_label) = if sm >= 2.0 {
+                (
+                    egui::Color32::from_rgb(0x40, 0xc0, 0x60),
+                    format!("SM: +{:.1} cal (very stable)", sm),
+                )
+            } else if sm >= 1.0 {
+                (
+                    egui::Color32::from_rgb(0x40, 0xc0, 0x60),
+                    format!("SM: +{:.1} cal (stable)", sm),
+                )
+            } else if sm >= 0.0 {
+                (
+                    egui::Color32::from_rgb(0xf0, 0xa0, 0x20),
+                    format!("SM: +{:.1} cal (marginal)", sm),
+                )
+            } else {
+                (
+                    egui::Color32::from_rgb(0xe5, 0x48, 0x4d),
+                    format!("SM: {:.1} cal (UNSTABLE!)", sm),
+                )
+            };
 
-        let (sm_color, sm_label) = if sm >= 2.0 {
-            (
-                egui::Color32::from_rgb(0x40, 0xc0, 0x60),
-                format!("SM: +{:.1} cal (very stable)", sm),
-            )
-        } else if sm >= 1.0 {
-            (
-                egui::Color32::from_rgb(0x40, 0xc0, 0x60),
-                format!("SM: +{:.1} cal (stable)", sm),
-            )
-        } else if sm >= 0.0 {
-            (
-                egui::Color32::from_rgb(0xf0, 0xa0, 0x20),
-                format!("SM: +{:.1} cal (marginal)", sm),
-            )
-        } else {
-            (
-                egui::Color32::from_rgb(0xe5, 0x48, 0x4d),
-                format!("SM: {:.1} cal (UNSTABLE!)", sm),
-            )
-        };
-
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(sm_label).strong().color(sm_color));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(sm_label).strong().color(sm_color));
+        }
     } else {
         ui.add_space(4.0);
         ui.label(
-            egui::RichText::new("CP: pending (Task 1.5 — design-time aero)")
-                .color(egui::Color32::from_rgb(0xf0, 0xa0, 0x20)),
+            egui::RichText::new("CP: no aero components (add fins)")
+                .color(egui::Color32::from_gray(120)),
         );
     }
 
     ui.add_space(4.0);
+
+    // Design-estimate label.
     ui.label(
-        egui::RichText::new(format!("Rocket length: {:.0} mm", rocket_length))
-            .small()
-            .color(egui::Color32::from_gray(140)),
+        egui::RichText::new(format!(
+            "Design estimate at M={:.1} · Rocket length: {:.0} mm",
+            aero.mach, rocket_length
+        ))
+        .small()
+        .color(egui::Color32::from_gray(140)),
     );
 }

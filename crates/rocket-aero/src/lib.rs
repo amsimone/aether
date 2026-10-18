@@ -15,3 +15,7 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
+
+pub mod design;
+
+pub use design::{estimate, static_margin, DesignAero};

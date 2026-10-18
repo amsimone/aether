@@ -3497,6 +3497,9 @@ dependencies = [
 [[package]]
 name = "rocket-aero"
 version = "0.1.0"
+dependencies = [
+ "rocket-core",
+]
 
 [[package]]
 name = "rocket-cli"
@@ -3583,6 +3586,7 @@ dependencies = [
  "eframe",
  "egui",
  "rfd",
+ "rocket-aero",
  "rocket-core",
  "rocket-io",
  "rocket-render",
