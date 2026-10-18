@@ -350,6 +350,171 @@ impl Motor {
             0.0
         }
     }
+
+    // ---- Simulation-time accessors (Phase 2) ----
+
+    /// Thrust at a given time since ignition, via linear interpolation
+    /// of the thrust curve.
+    ///
+    /// - For `time` before the first data point, returns the first
+    ///   point's thrust (motors often start at peak thrust).
+    /// - For `time` after the last data point (burnout), returns zero.
+    /// - Between data points, linearly interpolates.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. Returns zero thrust for a motor with an empty
+    /// curve.
+    #[must_use]
+    pub fn thrust_at(&self, time: Duration) -> Force {
+        if self.thrust_curve.is_empty() {
+            return Force::ZERO;
+        }
+        let t = time.as_seconds();
+
+        // Before the first point: clamp to the first thrust value.
+        // (RASP curves don't include t=0, so the first point is the
+        // ignition thrust.)
+        let (t0, f0) = (
+            self.thrust_curve[0].0.as_seconds(),
+            self.thrust_curve[0].1.as_newtons(),
+        );
+        if t <= t0 {
+            return Force::newtons(f0);
+        }
+
+        // After the last point: zero thrust (burnout).
+        let last = self.thrust_curve.last().expect("non-empty checked above");
+        if t >= last.0.as_seconds() {
+            return Force::ZERO;
+        }
+
+        // Find the bracketing interval and interpolate.
+        for window in self.thrust_curve.windows(2) {
+            let (t_a, f_a) = (window[0].0.as_seconds(), window[0].1.as_newtons());
+            let (t_b, f_b) = (window[1].0.as_seconds(), window[1].1.as_newtons());
+            if t >= t_a && t <= t_b {
+                let frac = if (t_b - t_a).abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    (t - t_a) / (t_b - t_a)
+                };
+                return Force::newtons(f_a + frac * (f_b - f_a));
+            }
+        }
+
+        // Should be unreachable given the checks above.
+        Force::ZERO
+    }
+
+    /// Total impulse delivered from ignition up to the given time, in N·s.
+    ///
+    /// Computed via the trapezoidal rule over the thrust curve, truncated
+    /// at `time`. This is the integral `∫ T(τ) dτ` over the curve's data
+    /// points and is consistent with [`total_impulse`](Self::total_impulse).
+    /// Used by the mass-depletion model.
+    ///
+    /// For times before the first data point, returns 0 (the curve is
+    /// treated as starting at its first recorded point). At burnout,
+    /// `impulse_up_to(burn_time) == total_impulse()`.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. Returns 0 for a motor with fewer than 2 data points.
+    #[must_use]
+    pub fn impulse_up_to(&self, time: Duration) -> f64 {
+        if self.thrust_curve.len() < 2 {
+            return 0.0;
+        }
+        let t_end = time.as_seconds();
+
+        let mut impulse = 0.0_f64;
+        for window in self.thrust_curve.windows(2) {
+            let (t_a, f_a) = (window[0].0.as_seconds(), window[0].1.as_newtons());
+            let (t_b, f_b) = (window[1].0.as_seconds(), window[1].1.as_newtons());
+
+            if t_end <= t_a {
+                break;
+            }
+            if t_end >= t_b {
+                // Full interval.
+                impulse += (t_b - t_a) * (f_a + f_b) / 2.0;
+            } else {
+                // Partial interval: integrate from t_a to t_end, with
+                // interpolated thrust at t_end.
+                let frac = if (t_b - t_a).abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    (t_end - t_a) / (t_b - t_a)
+                };
+                let f_at_end = f_a + frac * (f_b - f_a);
+                impulse += (t_end - t_a) * (f_a + f_at_end) / 2.0;
+                break;
+            }
+        }
+
+        impulse
+    }
+
+    /// Propellant mass burned from ignition up to the given time.
+    ///
+    /// Uses the impulse-proportional depletion model: the propellant
+    /// burns in proportion to the impulse delivered, so that exactly
+    /// `propellant_mass` is burned at burnout.
+    ///
+    /// ```text
+    /// m_burned(t) = (I(t) / I_total) · m_propellant
+    /// ```
+    ///
+    /// This is more accurate than a constant mass-flow rate because it
+    /// accounts for the thrust curve's shape.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. Returns zero for a motor with no propellant or
+    /// zero total impulse.
+    #[must_use]
+    pub fn propellant_mass_burned(&self, time: Duration) -> Mass {
+        let m_prop = self.propellant_mass.as_kilograms();
+        if m_prop <= 0.0 {
+            return Mass::ZERO;
+        }
+        let i_total = self.total_impulse();
+        if i_total <= 0.0 {
+            return Mass::ZERO;
+        }
+        let i_up_to = self.impulse_up_to(time);
+
+        // Clamp to [0, m_prop] to handle numerical edge cases.
+        let burned = (i_up_to / i_total * m_prop).clamp(0.0, m_prop);
+        Mass::kilograms(burned)
+    }
+
+    /// Motor mass (loaded casing + remaining propellant) at a given time.
+    ///
+    /// `mass(t) = total_mass − propellant_mass_burned(t)`
+    ///
+    /// At `t = 0` this returns `total_mass`; at burnout it returns
+    /// `total_mass − propellant_mass` (the dry casing mass).
+    ///
+    /// # Panics
+    ///
+    /// Does not panic.
+    #[must_use]
+    pub fn mass_at(&self, time: Duration) -> Mass {
+        let burned = self.propellant_mass_burned(time).as_kilograms();
+        Mass::kilograms((self.total_mass.as_kilograms() - burned).max(0.0))
+    }
+
+    /// Dry mass (casing without propellant).
+    ///
+    /// `mass_dry = total_mass − propellant_mass`
+    #[must_use]
+    pub fn dry_mass(&self) -> Mass {
+        Mass::kilograms(
+            (self.total_mass.as_kilograms() - self.propellant_mass.as_kilograms()).max(0.0),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -657,6 +822,172 @@ B6-4 18 70 4 0.0062 0.0201 Estes
         let json = serde_json::to_string(&motor).unwrap();
         let back: Motor = serde_json::from_str(&json).unwrap();
         assert_eq!(motor, back);
+    }
+
+    // ---- Simulation-time accessor tests (Phase 2, Task 2.3) ----
+
+    #[test]
+    fn thrust_at_interpolates_between_points() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        // At the first data point (t=0.026s), thrust should be 9.57 N.
+        let f = motor.thrust_at(Duration::seconds(0.026)).as_newtons();
+        assert!((f - 9.57).abs() < 1e-9, "thrust at first point: {f}");
+
+        // At the midpoint between 0.026 (9.57 N) and 0.061 (8.77 N):
+        // t = 0.0435, expected = (9.57 + 8.77) / 2 = 9.17 N
+        let f_mid = motor.thrust_at(Duration::seconds(0.0435)).as_newtons();
+        assert!((f_mid - 9.17).abs() < 0.01, "thrust at midpoint: {f_mid}");
+    }
+
+    #[test]
+    fn thrust_at_before_first_point_clamps_to_first_thrust() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        // Before the first data point, return the first thrust value.
+        let f = motor.thrust_at(Duration::seconds(0.0)).as_newtons();
+        assert!((f - 9.57).abs() < 1e-9, "thrust at t=0: {f}");
+        let f_neg = motor.thrust_at(Duration::seconds(-1.0)).as_newtons();
+        assert!((f_neg - 9.57).abs() < 1e-9);
+    }
+
+    #[test]
+    fn thrust_at_after_burnout_is_zero() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let burn = motor.burn_time();
+        let f = motor.thrust_at(Duration::seconds(burn + 1.0)).as_newtons();
+        assert!(f.abs() < 1e-9, "thrust after burnout should be 0, got {f}");
+        // Exactly at burnout (the last point has zero thrust).
+        let f_burn = motor.thrust_at(Duration::seconds(burn)).as_newtons();
+        assert!(f_burn.abs() < 1e-9, "thrust at burnout: {f_burn}");
+    }
+
+    #[test]
+    fn thrust_at_matches_data_points_exactly() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        for (t, f_expected) in &motor.thrust_curve {
+            let f_actual = motor.thrust_at(*t).as_newtons();
+            assert!(
+                (f_actual - f_expected.as_newtons()).abs() < 1e-9,
+                "thrust at t={} should be {}, got {}",
+                t.as_seconds(),
+                f_expected.as_newtons(),
+                f_actual
+            );
+        }
+    }
+
+    #[test]
+    fn impulse_up_to_at_burnout_equals_total_impulse() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let i_total = motor.total_impulse();
+        let i_up_to = motor.impulse_up_to(Duration::seconds(motor.burn_time()));
+        assert!(
+            (i_up_to - i_total).abs() < 1e-6,
+            "impulse up to burnout ({i_up_to}) should equal total impulse ({i_total})"
+        );
+    }
+
+    #[test]
+    fn impulse_up_to_at_zero_is_zero() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let i = motor.impulse_up_to(Duration::seconds(0.0));
+        assert!(i.abs() < 1e-9, "impulse at t=0 should be 0, got {i}");
+    }
+
+    #[test]
+    fn impulse_up_to_is_monotonic() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let mut prev = 0.0_f64;
+        for t_ms in 0..=600 {
+            let t = Duration::milliseconds(f64::from(t_ms));
+            let i = motor.impulse_up_to(t);
+            assert!(
+                i >= prev - 1e-9,
+                "impulse should be monotonic: t={t_ms}ms, i={i}, prev={prev}"
+            );
+            prev = i;
+        }
+    }
+
+    #[test]
+    fn propellant_mass_burned_at_zero_is_zero() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let m = motor.propellant_mass_burned(Duration::seconds(0.0));
+        assert!(m.as_kilograms().abs() < 1e-12);
+    }
+
+    #[test]
+    fn propellant_mass_burned_at_burnout_is_propellant_mass() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let m = motor.propellant_mass_burned(Duration::seconds(motor.burn_time()));
+        assert!(
+            (m.as_kilograms() - motor.propellant_mass.as_kilograms()).abs() < 1e-9,
+            "burned mass at burnout ({}) should equal propellant mass ({})",
+            m.as_grams(),
+            motor.propellant_mass.as_grams()
+        );
+    }
+
+    #[test]
+    fn mass_at_zero_is_total_mass() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let m = motor.mass_at(Duration::seconds(0.0));
+        assert!(
+            (m.as_kilograms() - motor.total_mass.as_kilograms()).abs() < 1e-12,
+            "mass at t=0 should be total mass"
+        );
+    }
+
+    #[test]
+    fn mass_at_burnout_is_dry_mass() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let m = motor.mass_at(Duration::seconds(motor.burn_time()));
+        let dry = motor.dry_mass();
+        assert!(
+            (m.as_kilograms() - dry.as_kilograms()).abs() < 1e-9,
+            "mass at burnout ({}) should be dry mass ({})",
+            m.as_grams(),
+            dry.as_grams()
+        );
+    }
+
+    #[test]
+    fn mass_decreases_monotonically() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let mut prev = motor.total_mass.as_kilograms();
+        for t_ms in 0..=600 {
+            let t = Duration::milliseconds(f64::from(t_ms));
+            let m = motor.mass_at(t).as_kilograms();
+            assert!(
+                m <= prev + 1e-12,
+                "mass should decrease: t={t_ms}ms, m={m}, prev={prev}"
+            );
+            prev = m;
+        }
+    }
+
+    #[test]
+    fn dry_mass_is_total_minus_propellant() {
+        let motor = parse(ESTES_A8_3).unwrap();
+        let dry = motor.dry_mass().as_grams();
+        let expected = motor.total_mass.as_grams() - motor.propellant_mass.as_grams();
+        assert!((dry - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn empty_curve_thrust_is_zero() {
+        let motor = Motor {
+            designation: "X".to_string(),
+            manufacturer: "Test".to_string(),
+            comment: vec![],
+            diameter: Length::millimeters(18.0),
+            length: Length::millimeters(70.0),
+            delays: vec![3.0],
+            propellant_mass: Mass::kilograms(0.003),
+            total_mass: Mass::kilograms(0.016),
+            thrust_curve: vec![],
+        };
+        assert_eq!(motor.thrust_at(Duration::seconds(0.5)), Force::ZERO);
+        assert!(motor.impulse_up_to(Duration::seconds(0.5)).abs() < 1e-12);
     }
 
     // ---- Property tests (fuzz-like coverage) ----

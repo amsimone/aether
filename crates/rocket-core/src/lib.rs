@@ -28,4 +28,4 @@ pub use rocket::{MassProperties, Rocket};
 pub use stage::{
     Event, EventAction, EventTrigger, MotorMount, RecoveryDevice, RecoveryKind, Stage,
 };
-pub use units::{Density, Duration, Force, Length, Mass, Pressure, Velocity};
+pub use units::{Density, Duration, Force, Length, Mass, Pressure, Temperature, Velocity};

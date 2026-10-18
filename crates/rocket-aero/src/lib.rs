@@ -17,5 +17,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod design;
+pub mod drag;
 
 pub use design::{estimate, static_margin, DesignAero};
+pub use drag::{estimate_cd, estimate_cd_breakdown, DragBreakdown};

@@ -1,10 +1,19 @@
 //! # rocket-sim
 //!
-//! The flight loop: Dormand-Prince RK45 integration with adaptive step
-//! size and event detection (apogee, ground, deployment, staging),
-//! telemetry streaming, and the tier-suggestion function.
+//! The flight loop: fixed-step RK4 integration with event detection
+//! (apogee, ground impact), telemetry streaming, and the sim config.
 //!
-//! Depends on: `rocket-core`, `rocket-physics`, `rocket-aero`.
+//! Phase 2 implements a 3-DOF translational (point-mass) model:
+//! - Thrust along the launch direction during boost.
+//! - Gravity (constant g).
+//! - Drag (constant Cd) opposing velocity relative to wind.
+//! - ISA atmosphere for density.
+//!
+//! Phase 3 will add 6-DOF attitude dynamics, variable Cd with Mach, and
+//! recovery events.
+//!
+//! Depends on: `rocket-core`, `rocket-physics`, `rocket-aero`,
+//! `rocket-motors`.
 //!
 //! See:
 //! - `docs/adr/0003-rk45-dopri5-integrator.md`
@@ -12,6 +21,13 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
+
+mod integrator;
+mod result;
+mod state;
+
+pub use result::{SimResult, TelemetryPoint};
+pub use state::{SimConfig, SimState, Simulator, DEFAULT_TIME_STEP};
 
 // Re-export the core types so consumers of rocket-sim don't need to
 // depend on rocket-core directly for common types.

@@ -3562,6 +3562,9 @@ dependencies = [
 [[package]]
 name = "rocket-physics"
 version = "0.1.0"
+dependencies = [
+ "rocket-core",
+]
 
 [[package]]
 name = "rocket-render"
@@ -3576,7 +3579,10 @@ dependencies = [
 name = "rocket-sim"
 version = "0.1.0"
 dependencies = [
+ "rocket-aero",
  "rocket-core",
+ "rocket-motors",
+ "rocket-physics",
 ]
 
 [[package]]

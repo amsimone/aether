@@ -15,3 +15,7 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
+
+pub mod atmosphere;
+
+pub use atmosphere::{AtmosphereState, IsaAtmosphere};

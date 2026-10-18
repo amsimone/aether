@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 rocket-core = { path = "../rocket-core", version = "0.1.0" }
+rocket-physics = { path = "../rocket-physics", version = "0.1.0" }
+rocket-aero = { path = "../rocket-aero", version = "0.1.0" }
+rocket-motors = { path = "../rocket-motors", version = "0.1.0" }
 
 [lints]
 workspace = true

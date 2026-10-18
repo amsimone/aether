@@ -126,6 +126,13 @@ quantity!(
 );
 
 quantity!(
+    /// A temperature in kelvin. Display: `K`.
+    Temperature,
+    "K",
+    "kelvin"
+);
+
+quantity!(
     /// A duration in seconds. Display: `s`.
     Duration,
     "s",
@@ -260,6 +267,32 @@ impl Duration {
     }
 }
 
+impl Temperature {
+    /// Create from kelvin.
+    #[must_use]
+    pub const fn kelvin(k: f64) -> Self {
+        Self(k)
+    }
+
+    /// Create from degrees Celsius.
+    #[must_use]
+    pub fn celsius(c: f64) -> Self {
+        Self(c + 273.15)
+    }
+
+    /// Return the value in kelvin.
+    #[must_use]
+    pub const fn as_kelvin(self) -> f64 {
+        self.0
+    }
+
+    /// Return the value in degrees Celsius.
+    #[must_use]
+    pub fn as_celsius(self) -> f64 {
+        self.0 - 273.15
+    }
+}
+
 impl Velocity {
     /// Create from meters per second.
     #[must_use]
@@ -339,5 +372,15 @@ mod tests {
         let json = serde_json::to_string(&l).expect("serialize");
         let back: Length = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(l, back);
+    }
+
+    #[test]
+    fn temperature_conversions() {
+        let t = Temperature::celsius(15.0);
+        assert!((t.as_kelvin() - 288.15).abs() < 1e-9);
+        assert!((t.as_celsius() - 15.0).abs() < 1e-9);
+
+        let boiling = Temperature::celsius(100.0);
+        assert!((boiling.as_kelvin() - 373.15).abs() < 1e-9);
     }
 }
