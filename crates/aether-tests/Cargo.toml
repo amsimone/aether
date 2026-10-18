@@ -1,0 +1,17 @@
+[package]
+name = "aether-tests"
+description = "Integration and validation tests for the Aether rocket simulator."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+rocket-core = { path = "../rocket-core", version = "0.1.0" }
+rocket-motors = { path = "../rocket-motors", version = "0.1.0" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

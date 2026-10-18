@@ -12,6 +12,7 @@ members = [
     "crates/rocket-io",
     "crates/rocket-ui",
     "crates/rocket-cli",
+    "crates/aether-tests",
 ]
 
 [workspace.package]

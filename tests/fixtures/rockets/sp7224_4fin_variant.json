@@ -1,0 +1,38 @@
+{
+  "name": "SP-7224 Worked Example — 4-Fin Variant",
+  "source": "NASA SP-7224 (Barrowman 1967) with 4 fins instead of 3",
+  "description": "Same rocket as sp7224_worked_example.json but with 4 fins. Used to validate the fin-count projection factor: the ratio of C_Nα(4-fin) to C_Nα(3-fin) must match SP-7224's projection factors exactly.",
+  "tier": "T0",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "conical",
+      "length_mm": 76.2,
+      "base_diameter_mm": 25.4,
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 203.2,
+      "outer_diameter_mm": 25.4,
+      "position_mm": 76.2
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 4,
+      "planform": "trapezoidal",
+      "root_chord_mm": 50.8,
+      "tip_chord_mm": 25.4,
+      "span_mm": 38.1,
+      "sweep_mm": 25.4,
+      "thickness_mm": 2.54,
+      "airfoil": "square",
+      "position_mm": 228.6
+    }
+  ],
+  "reference_data": {
+    "type": "sp7224",
+    "expected_cn_alpha_ratio_4_to_3_fin": "see SP-7224 Table for projection factor",
+    "tolerance": 0.001
+  }
+}

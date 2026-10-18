@@ -1,0 +1,58 @@
+{
+  "name": "Estes Alpha (clone)",
+  "source": "Estes Industries technical spec + RASAero validation panel",
+  "source_url": "https://www.estesrockets.com/",
+  "description": "The classic 3-fin model rocket. Well-characterized Cd vs Mach from wind tunnel and RASAero. The canonical reference for model rocket aerodynamics validation.",
+  "tier": "T0",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "ogive",
+      "length_mm": 70,
+      "base_diameter_mm": 24.8,
+      "material": "balsa",
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 180,
+      "outer_diameter_mm": 24.8,
+      "inner_diameter_mm": 24.1,
+      "material": "cardboard",
+      "position_mm": 70
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 3,
+      "planform": "trapezoidal",
+      "root_chord_mm": 50,
+      "tip_chord_mm": 25,
+      "span_mm": 35,
+      "sweep_mm": 25,
+      "thickness_mm": 3,
+      "airfoil": "square",
+      "material": "balsa",
+      "position_mm": 200,
+      "mount": "body_tube_1"
+    },
+    {
+      "type": "LaunchLug",
+      "inner_diameter_mm": 5,
+      "length_mm": 25,
+      "position_mm": 100
+    }
+  ],
+  "motor_mount": {
+    "tube_inner_diameter_mm": 18,
+    "position_mm": 220
+  },
+  "reference_motor": "estes_a8_3.eng",
+  "reference_data": {
+    "type": "rasaero",
+    "file": "reference_data/estes_alpha_rasaero.csv",
+    "expected_apogee_m": 110,
+    "expected_max_mach": 0.35,
+    "expected_cd_at_mach_01": 0.45,
+    "expected_cp_at_mach_01_calibers": 2.1
+  }
+}

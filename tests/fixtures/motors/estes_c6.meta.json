@@ -1,0 +1,12 @@
+{
+  "motor_id": "estes_c6",
+  "designation": "C6",
+  "manufacturer": "Estes",
+  "source": "cert",
+  "format": "RASP",
+  "license": "PD",
+  "license_verified": true,
+  "license_verified_date": "2026-10-18",
+  "license_verified_by": "manual check on ThrustCurve.org",
+  "info_url": "https://www.thrustcurve.org/motors/Estes/C6/"
+}

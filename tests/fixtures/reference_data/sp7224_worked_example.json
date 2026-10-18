@@ -1,0 +1,60 @@
+{
+  "source": "NASA SP-7224 (Barrowman 1967), worked example tables",
+  "source_url": "https://ntrs.nasa.gov/citations/19680011815",
+  "description": "Machine-readable transcription of the tabulated C_Nα and x_cp values from the SP-7224 worked example. These are the exact numbers our aero module must reproduce. Any discrepancy indicates a formula or transcription error in our Barrowman implementation.",
+  "units": {
+    "cn_alpha": "per radian",
+    "x_cp": "meters from nose tip",
+    "calibers": "body diameters"
+  },
+  "reference_diameter_mm": 25.4,
+  "components": {
+    "nose_cone": {
+      "shape": "conical",
+      "length_mm": 76.2,
+      "base_diameter_mm": 25.4,
+      "cn_alpha": 2.0,
+      "x_cp_mm": 50.8,
+      "note": "For a conical nose, C_Nα = 2 (slender body limit) and x_cp = 2/3 * L_nose"
+    },
+    "body_tube": {
+      "cn_alpha": 0.0,
+      "x_cp_mm": null,
+      "note": "Cylindrical body contributes zero C_Nα in linear Barrowman theory"
+    },
+    "fin_set_3fin": {
+      "fin_count": 3,
+      "root_chord_mm": 50.8,
+      "tip_chord_mm": 25.4,
+      "span_mm": 38.1,
+      "sweep_mm": 25.4,
+      "cn_alpha": "TODO: transcribe exact value from SP-7224 Table",
+      "x_cp_mm": "TODO: transcribe exact value from SP-7224 Table",
+      "note": "The 3-fin projection factor differs from 4-fin. See SP-7224 §3.2."
+    },
+    "fin_set_4fin": {
+      "fin_count": 4,
+      "cn_alpha": "TODO: transcribe exact value from SP-7224 Table",
+      "x_cp_mm": "TODO: transcribe exact value from SP-7224 Table",
+      "ratio_to_3fin": "TODO: the 4-fin/3-fin C_Nα ratio from SP-7224"
+    }
+  },
+  "totals": {
+    "3fin": {
+      "cn_alpha_total": "TODO: transcribe from SP-7224",
+      "x_cp_total_mm": "TODO: transcribe from SP-7224",
+      "x_cp_total_calibers": "TODO: transcribe from SP-7224"
+    },
+    "4fin": {
+      "cn_alpha_total": "TODO: transcribe from SP-7224",
+      "x_cp_total_mm": "TODO: transcribe from SP-7224",
+      "x_cp_total_calibers": "TODO: transcribe from SP-7224"
+    }
+  },
+  "validation_notes": [
+    "All TODO values must be transcribed from the original SP-7224 report before the aero unit tests can assert against them.",
+    "The report is available from NASA NTRS: https://ntrs.nasa.gov/citations/19680011815",
+    "Tolerance: our implementation must match to 4 significant figures (0.01%).",
+    "The conical nose values (C_Nα=2, x_cp=2/3·L) are exact and can be asserted immediately."
+  ]
+}

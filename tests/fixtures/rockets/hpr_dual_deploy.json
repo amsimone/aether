@@ -1,0 +1,62 @@
+{
+  "name": "HPR Dual-Deploy Flight",
+  "source": "Published HPR flight log with altimeter + GPS data",
+  "description": "A high-power rocket with dual deployment (drogue at apogee, main at 300m). Used for end-to-end validation of the full 6-DOF sim: apogee within 7%, descent rate within 10%, landing position within 15% of flight log. This is the Phase 3 gate test.",
+  "tier": "T1",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "tangent_ogive",
+      "length_mm": 300,
+      "base_diameter_mm": 75,
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 1200,
+      "outer_diameter_mm": 75,
+      "position_mm": 300
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 4,
+      "planform": "trapezoidal",
+      "root_chord_mm": 150,
+      "tip_chord_mm": 75,
+      "span_mm": 100,
+      "sweep_mm": 75,
+      "thickness_mm": 5,
+      "airfoil": "airfoil",
+      "position_mm": 1350
+    }
+  ],
+  "motor_mount": {
+    "tube_inner_diameter_mm": 54,
+    "position_mm": 1300
+  },
+  "recovery": [
+    {
+      "type": "drogue",
+      "deploy_at": "apogee",
+      "diameter_mm": 600,
+      "cd": 1.0
+    },
+    {
+      "type": "main",
+      "deploy_at_altitude_m": 300,
+      "diameter_mm": 1500,
+      "cd": 1.2
+    }
+  ],
+  "reference_motor": "aerotech_j450.eng",
+  "reference_data": {
+    "type": "flight_log",
+    "file": "reference_data/hpr_dual_deploy_flight.csv",
+    "expected_apogee_m": 2500,
+    "apogee_tolerance_percent": 7,
+    "expected_descent_rate_mps": 8,
+    "descent_rate_tolerance_percent": 10,
+    "expected_landing_drift_m": 500,
+    "landing_tolerance_percent": 15
+  }
+}

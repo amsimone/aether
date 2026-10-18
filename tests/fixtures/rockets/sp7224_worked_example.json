@@ -1,0 +1,41 @@
+{
+  "name": "SP-7224 Worked Example",
+  "source": "NASA SP-7224 (Barrowman 1967) — the original Barrowman report",
+  "source_url": "https://ntrs.nasa.gov/citations/19680011815",
+  "description": "The fully worked example from the SP-7224 report. Tabulated C_Nα and x_cp values are the primary validation target for the Barrowman buildup implementation. If our aero module doesn't match these numbers exactly, we have a formula or transcription error.",
+  "tier": "T0",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "conical",
+      "length_mm": 76.2,
+      "base_diameter_mm": 25.4,
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 203.2,
+      "outer_diameter_mm": 25.4,
+      "position_mm": 76.2
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 3,
+      "planform": "trapezoidal",
+      "root_chord_mm": 50.8,
+      "tip_chord_mm": 25.4,
+      "span_mm": 38.1,
+      "sweep_mm": 25.4,
+      "thickness_mm": 2.54,
+      "airfoil": "square",
+      "position_mm": 228.6
+    }
+  ],
+  "reference_data": {
+    "type": "sp7224",
+    "file": "reference_data/sp7224_worked_example.json",
+    "expected_cn_alpha_total": "see sp7224_worked_example.json for tabulated values",
+    "expected_x_cp": "see sp7224_worked_example.json for tabulated values",
+    "tolerance": 0.001
+  }
+}

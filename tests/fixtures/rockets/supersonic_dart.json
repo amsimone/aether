@@ -1,0 +1,44 @@
+{
+  "name": "Supersonic Dart",
+  "source": "RASAero validation panel (publicly documented supersonic case)",
+  "description": "A slender dart-style rocket for validating compressible aerodynamics. CP must move FORWARD with Mach through transonic into supersonic — a critical stability concern that amateur tools often miss. Cd vs Mach should match RASAero within the transonic band (±20%) and supersonic (±10%).",
+  "tier": "T1",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "von_karman",
+      "length_mm": 200,
+      "base_diameter_mm": 40,
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 600,
+      "outer_diameter_mm": 40,
+      "position_mm": 200
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 4,
+      "planform": "trapezoidal",
+      "root_chord_mm": 80,
+      "tip_chord_mm": 40,
+      "span_mm": 50,
+      "sweep_mm": 40,
+      "thickness_mm": 3,
+      "airfoil": "airfoil",
+      "position_mm": 720
+    }
+  ],
+  "reference_data": {
+    "type": "rasaero",
+    "file": "reference_data/supersonic_dart_rasaero.csv",
+    "expected_cp_at_mach_05_calibers": 1.5,
+    "expected_cp_at_mach_10_calibers": 0.8,
+    "expected_cp_at_mach_20_calibers": 0.6,
+    "cp_tolerance_calibers": 0.5,
+    "cd_tolerance_percent_at_mach_01": 10,
+    "cd_tolerance_percent_transonic": 20,
+    "cd_tolerance_percent_supersonic": 10
+  }
+}

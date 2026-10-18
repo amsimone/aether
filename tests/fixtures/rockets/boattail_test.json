@@ -1,0 +1,51 @@
+{
+  "name": "Boattail Sign-Convention Test",
+  "source": "Synthetic — textbook case for boattail destabilization",
+  "description": "A simple rocket with a conical boattail (reducing tail diameter). The boattail adds NEGATIVE C_Nα with CP aft, which moves the overall CP FORWARD (destabilizing). This test catches the most common sign error in transition/boattail aero: getting the sign backwards makes boattails appear stabilizing.",
+  "tier": "T0",
+  "components": [
+    {
+      "type": "NoseCone",
+      "shape": "conical",
+      "length_mm": 50,
+      "base_diameter_mm": 30,
+      "position_mm": 0
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 200,
+      "outer_diameter_mm": 30,
+      "position_mm": 50
+    },
+    {
+      "type": "Transition",
+      "shape": "conical",
+      "length_mm": 30,
+      "fore_diameter_mm": 30,
+      "aft_diameter_mm": 20,
+      "position_mm": 250
+    },
+    {
+      "type": "BodyTube",
+      "length_mm": 20,
+      "outer_diameter_mm": 20,
+      "position_mm": 280
+    },
+    {
+      "type": "FinSet",
+      "fin_count": 4,
+      "planform": "trapezoidal",
+      "root_chord_mm": 40,
+      "tip_chord_mm": 20,
+      "span_mm": 30,
+      "sweep_mm": 20,
+      "thickness_mm": 2,
+      "position_mm": 270
+    }
+  ],
+  "reference_data": {
+    "type": "analytical",
+    "assertion": "CP with boattail must be FORWARD of CP without boattail (by 0.1-0.5 calibers)",
+    "tolerance_calibers": 0.05
+  }
+}
