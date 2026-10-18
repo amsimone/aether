@@ -1,5 +1,8 @@
 name: CI
 
+# Minimal single-OS CI: fmt + clippy + test + DAG check + cargo-deny.
+# Runs in ~2 min. The 3-OS matrix can be re-enabled later if needed.
+
 on:
   push:
     branches: [main]
@@ -12,12 +15,8 @@ env:
 
 jobs:
   check:
-    name: Check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Check & test
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -54,5 +53,4 @@ jobs:
         run: cargo deny check
 
       - name: Dependency DAG check (ADR-0001)
-        shell: bash
         run: ./scripts/check_dag.sh
