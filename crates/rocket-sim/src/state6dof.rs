@@ -51,7 +51,7 @@ pub struct SimState6Dof {
     pub position: Vec3,
     /// Velocity in the launch frame (m/s).
     pub velocity: Vec3,
-    /// Attitude quaternion (body ← launch).
+    /// Attitude quaternion mapping body vectors to the launch frame.
     pub quaternion: Quaternion,
     /// Angular velocity in the body frame (rad/s).
     pub angular_velocity: Vec3,
@@ -100,8 +100,8 @@ pub struct RecoveryState {
 }
 
 impl RecoveryState {
-    /// Default recovery config for an LPR: drogue at apogee (small),
-    /// main at 50 m AGL (larger).
+    /// Example recovery configuration: drogue at apogee, main at 50 m AGL.
+    /// Drag areas are inputs; descent speed also depends on mass and density.
     #[must_use]
     pub fn default_lpr() -> Self {
         Self {
@@ -110,12 +110,7 @@ impl RecoveryState {
             main_deployed: false,
             main_time: None,
             main_altitude: 50.0, // LPR: deploy main at 50m AGL (low altitude)
-            // For an LPR, the "drogue" is typically a streamer or small
-            // chute. Model it as a small drag area that gives ~15-20 m/s
-            // descent (fast enough to not drift too far, slow enough to
-            // not lawn-dart).
             drogue_cd_a: 0.05,
-            // A 24" parachute for an LPR has Cd·A ≈ 0.5 m², giving ~5 m/s.
             main_cd_a: 0.5,
         }
     }
@@ -160,6 +155,16 @@ impl Simulator6Dof {
     /// Run the 6-DOF simulation to ground impact.
     #[must_use]
     pub fn run(&self) -> SimResult {
+        self.run_for(Duration::seconds(300.0))
+    }
+
+    /// Run with an explicit maximum duration, including the existing ground stop.
+    #[must_use]
+    pub fn run_for(&self, maximum_duration: Duration) -> SimResult {
+        let max_time = maximum_duration.as_seconds();
+        if !max_time.is_finite() || max_time <= 0.0 {
+            return SimResult::empty();
+        }
         if self.config.time_step <= 0.0 || self.config.telemetry_interval <= 0.0 {
             return SimResult::empty();
         }
@@ -190,7 +195,7 @@ impl Simulator6Dof {
         let mut prev_vz = 0.0_f64;
 
         // Record initial telemetry.
-        let (atm0, aero0, forces0) = self.compute_dynamics(&state, 0.0);
+        let (atm0, aero0, forces0) = self.compute_dynamics(&state, &recovery);
         let accel0 = forces0.acceleration;
         telemetry.push(TelemetryPoint {
             time: state.time,
@@ -204,19 +209,13 @@ impl Simulator6Dof {
         next_telemetry_time = self.config.telemetry_interval;
         let _ = (atm0, aero0);
 
-        let max_time = 300.0;
-
         while state.time.as_seconds() < max_time {
             let t = state.time.as_seconds();
-            let (atm, _aero, forces) = self.compute_dynamics(&state, t);
 
             // Track maxima.
             let speed = state.velocity.mag();
             if speed > max_velocity {
                 max_velocity = speed;
-            }
-            if forces.acceleration > max_accel {
-                max_accel = forces.acceleration;
             }
             if state.position.z > max_altitude {
                 max_altitude = state.position.z;
@@ -241,6 +240,10 @@ impl Simulator6Dof {
                 recovery.main_time = Some(t);
             }
 
+            // Evaluate telemetry and integration with the same deployed recovery state.
+            let (_, _, forces) = self.compute_dynamics(&state, &recovery);
+            max_accel = max_accel.max(forces.acceleration);
+
             // Ground impact.
             if state.velocity.z < 0.0 && state.position.z <= ground_z {
                 break;
@@ -262,9 +265,7 @@ impl Simulator6Dof {
 
             // RK4 step.
             let recovery_snapshot = recovery;
-            state = rk4_step_6dof(&state, dt, |s| {
-                self.derivatives(s, &recovery_snapshot, &atm)
-            });
+            state = rk4_step_6dof(&state, dt, |s| self.derivatives(s, &recovery_snapshot));
             // Recompute mass from the motor schedule.
             self.update_mass(&mut state);
             // Renormalize the quaternion to prevent drift.
@@ -272,7 +273,7 @@ impl Simulator6Dof {
         }
 
         // Final telemetry.
-        let (_, _, forces_f) = self.compute_dynamics(&state, state.time.as_seconds());
+        let (_, _, forces_f) = self.compute_dynamics(&state, &recovery);
         telemetry.push(TelemetryPoint {
             time: state.time,
             position: state.position.to_tuple(),
@@ -298,7 +299,7 @@ impl Simulator6Dof {
     fn compute_dynamics(
         &self,
         state: &SimState6Dof,
-        _t: f64,
+        recovery: &RecoveryState,
     ) -> (AtmosphereState, AeroCoefficients, Forces) {
         let t = state.time;
         let thrust_n = if t.as_seconds() < self.motor.burn_time() {
@@ -341,32 +342,24 @@ impl Simulator6Dof {
             },
         );
 
-        // Compute the CG and inertia at the current time (mass-derived).
-        // Inertia is used by the derivatives function; here we only need CG.
-        let (cg_x, _i_axial, _i_transverse) = self.mass_properties_at(t);
-
         let q_bar = 0.5 * rho * v_rel_mag * v_rel_mag;
-        let forces =
-            self.assemble_forces(state, &aero, q_bar, cg_x, thrust_n, v_rel_body, v_rel_mag);
+        let forces = Self::assemble_forces(state, &aero, q_bar, thrust_n, v_rel_body, recovery);
 
         (atm, aero, forces)
     }
 
-    /// Assemble forces and moments in the body frame, then compute the
+    /// Assemble forces in the body frame, then compute the
     /// total acceleration in the launch frame.
     fn assemble_forces(
-        &self,
         state: &SimState6Dof,
         aero: &AeroCoefficients,
         q_bar: f64,
-        cg_x: f64,
         thrust_n: f64,
         v_rel_body: Vec3,
-        v_rel_mag: f64,
+        recovery: &RecoveryState,
     ) -> Forces {
         let m = state.mass.as_kilograms().max(1e-9);
         let ref_a = aero.reference_area;
-        let ref_l = aero.reference_length;
 
         // Thrust along body +x.
         let f_thrust_body = Vec3::new(thrust_n, 0.0, 0.0);
@@ -383,20 +376,21 @@ impl Simulator6Dof {
         // Gravity in launch frame.
         let f_grav_launch = Vec3::new(0.0, 0.0, -G * m);
 
-        // Recovery drag (if deployed).
-        let mut f_recovery_body = Vec3::ZERO;
-        if self.recovery.drogue_deployed {
-            let cd_a = if self.recovery.main_deployed {
-                self.recovery.main_cd_a
-            } else {
-                self.recovery.drogue_cd_a
-            };
-            // Recovery drag opposes velocity (in body frame it's along -v_rel_body).
-            if v_rel_mag > 1e-6 {
-                let drag_mag = q_bar * cd_a * 2.0; // q_bar = ½ρv², so F = q_bar·Cd·A
-                f_recovery_body = v_rel_body * (-drag_mag / v_rel_mag);
-            }
-        }
+        let v_rel_mag = v_rel_body.mag();
+        let cd_a = if recovery.main_deployed {
+            recovery.main_cd_a
+        } else if recovery.drogue_deployed {
+            recovery.drogue_cd_a
+        } else {
+            0.0
+        };
+        // Dynamic pressure already includes the factor 1/2.
+        let recovery_drag = q_bar * cd_a;
+        let f_recovery_body = if v_rel_mag > 1e-6 {
+            v_rel_body * (-recovery_drag / v_rel_mag)
+        } else {
+            Vec3::ZERO
+        };
 
         // Total force in body frame (thrust + aero + recovery).
         let f_body_total = f_thrust_body + f_aero_body + f_recovery_body;
@@ -410,26 +404,8 @@ impl Simulator6Dof {
 
         // Thrust and drag magnitudes for telemetry.
         let thrust = Force::newtons(thrust_n);
-        let drag = Force::newtons(
-            q_bar * ref_a * aero.c_a
-                + if self.recovery.drogue_deployed {
-                    if v_rel_mag > 1e-6 {
-                        q_bar
-                            * (if self.recovery.main_deployed {
-                                self.recovery.main_cd_a
-                            } else {
-                                self.recovery.drogue_cd_a
-                            })
-                            * 2.0
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                },
-        );
+        let drag = Force::newtons(q_bar * ref_a * aero.c_a + recovery_drag);
 
-        let _ = (cg_x, ref_l); // used in moment computation (future)
         Forces {
             acceleration: accel_mag,
             thrust,
@@ -443,79 +419,18 @@ impl Simulator6Dof {
         &self,
         state: &SimState6Dof,
         recovery: &RecoveryState,
-        atm: &AtmosphereState,
     ) -> (
         (f64, f64, f64),
         (f64, f64, f64),
         (f64, f64, f64, f64),
         (f64, f64, f64),
     ) {
-        let t = state.time;
-        let thrust_n = if t.as_seconds() < self.motor.burn_time() {
-            self.motor.thrust_at(t).as_newtons()
-        } else {
-            0.0
-        };
-
+        let (atm, aero, forces) = self.compute_dynamics(state, recovery);
+        let (_, i_axial, i_transverse) = self.mass_properties_at(state.time);
+        let v_rel_launch = state.velocity - Vec3::from_tuple(self.config.wind);
         let rho = atm.density.as_kilograms_per_cubic_meter();
-
-        let v_rel_launch = Vec3::new(
-            state.velocity.x - self.config.wind.0,
-            state.velocity.y - self.config.wind.1,
-            state.velocity.z - self.config.wind.2,
-        );
-        let v_rel_body = state.quaternion.rotate_to_body(v_rel_launch);
-        let v_rel_mag = v_rel_body.mag();
-
-        let mach = if atm.speed_of_sound.as_meters_per_second() > 1e-6 {
-            v_rel_mag / atm.speed_of_sound.as_meters_per_second()
-        } else {
-            0.0
-        };
-
-        let (alpha, beta) = angle_of_attack_sideslip(v_rel_body);
-
-        let aero = compute(
-            &self.rocket,
-            AeroQuery {
-                mach,
-                alpha,
-                beta,
-                roll_rate: state.angular_velocity.x,
-                pitch_rate: state.angular_velocity.y,
-                reynolds: 0.0,
-            },
-        );
-
-        let (cg_x, i_axial, i_transverse) = self.mass_properties_at(t);
-        let q_bar = 0.5 * rho * v_rel_mag * v_rel_mag;
-        let m = state.mass.as_kilograms().max(1e-9);
-
-        // Forces in body frame.
-        let f_thrust_body = Vec3::new(thrust_n, 0.0, 0.0);
-        let f_aero_body = Vec3::new(
-            -q_bar * aero.reference_area * aero.c_a,
-            q_bar * aero.reference_area * aero.c_y,
-            q_bar * aero.reference_area * aero.c_n,
-        );
-        let f_grav_launch = Vec3::new(0.0, 0.0, -G * m);
-
-        let mut f_recovery_body = Vec3::ZERO;
-        if recovery.drogue_deployed {
-            let cd_a = if recovery.main_deployed {
-                recovery.main_cd_a
-            } else {
-                recovery.drogue_cd_a
-            };
-            if v_rel_mag > 1e-6 {
-                let drag_mag = q_bar * cd_a * 2.0;
-                f_recovery_body = v_rel_body * (-drag_mag / v_rel_mag);
-            }
-        }
-
-        let f_body_total = f_thrust_body + f_aero_body + f_recovery_body;
-        let f_launch = state.quaternion.rotate_to_launch(f_body_total) + f_grav_launch;
-        let accel = f_launch / m;
+        let q_bar = 0.5 * rho * v_rel_launch.mag().powi(2);
+        let accel = forces.accel_vec;
 
         // Moments about the CG in the body frame.
         // Aero moment: c_m (pitch) and c_n_yaw (yaw), scaled by q·A·L.
@@ -553,8 +468,6 @@ impl Simulator6Dof {
         // Quaternion kinematics: q̇ = ½·q⊗ω_quat.
         let omega_quat = Quaternion::new(0.0, omega.x, omega.y, omega.z);
         let q_dot = state.quaternion.hamilton(omega_quat) * 0.5;
-
-        let _ = cg_x; // CG used for moment arm in thrust moment (future)
 
         (
             (state.velocity.x, state.velocity.y, state.velocity.z),
@@ -610,7 +523,6 @@ impl Simulator6Dof {
 }
 
 /// Forces computed at a state, for telemetry.
-#[allow(dead_code)]
 struct Forces {
     acceleration: f64,
     thrust: Force,
@@ -909,6 +821,85 @@ mod tests {
         assert!(
             cg_burn < cg0,
             "CG should move forward during burn: cg0={cg0:.4}, cg_burn={cg_burn:.4}"
+        );
+    }
+    fn recovery_test_sim() -> Simulator6Dof {
+        let mut rocket = Rocket::new("Recovery verification");
+        rocket.root.push(Component::MassObject(MassObject {
+            id: ComponentId::new(1),
+            position: Length::ZERO,
+            mass: Mass::kilograms(1.0),
+            kind: MassObjectKind::Other,
+        }));
+        Simulator6Dof::new(rocket, parse_a8_3(), SimConfig::vertical())
+    }
+
+    fn falling_state(sim: &Simulator6Dof) -> SimState6Dof {
+        let time = Duration::seconds(10.0); // Motor burnout is complete.
+        SimState6Dof {
+            time,
+            position: Vec3::new(0.0, 0.0, 1000.0),
+            velocity: Vec3::new(3.0, 4.0, -12.0),
+            quaternion: attitude_from_launch_dir(Vec3::UNIT_Z),
+            angular_velocity: Vec3::ZERO,
+            mass: sim.dry_mass + sim.motor.mass_at(time),
+        }
+    }
+
+    #[test]
+    fn recovery_force_and_telemetry_match_dynamic_pressure_for_each_deployment() {
+        let mut sim = recovery_test_sim();
+        sim.config.wind = (1.0, -2.0, 0.0);
+        let state = falling_state(&sim);
+        let mut recovery = RecoveryState {
+            drogue_cd_a: 0.07,
+            main_cd_a: 0.2,
+            ..RecoveryState::default()
+        };
+        // The simulator's original recovery state stays stowed throughout.
+        // The evolving run state must be used by both reported forces and derivatives.
+        for (drogue, main, area) in [(false, false, 0.0), (true, false, 0.07), (true, true, 0.2)] {
+            recovery.drogue_deployed = drogue;
+            recovery.main_deployed = main;
+            let (atm, _, forces) = sim.compute_dynamics(&state, &recovery);
+            let relative = state.velocity - Vec3::from_tuple(sim.config.wind);
+            let speed = relative.mag();
+            let expected_drag =
+                0.5 * atm.density.as_kilograms_per_cubic_meter() * speed.powi(2) * area;
+            assert!((forces.drag.as_newtons() - expected_drag).abs() < 1e-10);
+            let expected_accel = relative * (-expected_drag / (speed * state.mass.as_kilograms()))
+                + Vec3::new(0.0, 0.0, -G);
+            assert!((forces.accel_vec - expected_accel).mag() < 1e-10);
+            let (_, acceleration, _, _) = sim.derivatives(&state, &recovery);
+            assert!((Vec3::from_tuple(acceleration) - expected_accel).mag() < 1e-10);
+            assert!((forces.acceleration - expected_accel.mag()).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn integrated_parachute_descent_matches_analytical_terminal_speed() {
+        let sim = recovery_test_sim();
+        let mut state = falling_state(&sim);
+        state.velocity = Vec3::ZERO;
+        let recovery = RecoveryState {
+            drogue_deployed: true,
+            drogue_cd_a: 0.2,
+            ..RecoveryState::default()
+        };
+        for _ in 0..1000 {
+            state = rk4_step_6dof(&state, 0.01, |s| sim.derivatives(s, &recovery));
+        }
+        let rho = sim
+            .atmosphere
+            .at(Length::meters(state.position.z))
+            .density
+            .as_kilograms_per_cubic_meter();
+        let expected = (2.0 * state.mass.as_kilograms() * G / (rho * recovery.drogue_cd_a)).sqrt();
+        let error = (state.velocity.mag() - expected).abs() / expected;
+        assert!(
+            error < 0.005,
+            "terminal speed relative error {error}, speed {}, expected {expected}",
+            state.velocity.mag()
         );
     }
 }

@@ -24,7 +24,11 @@ use crate::app::AetherApp;
 
 /// Show the properties panel for the selected component.
 pub fn show_properties(app: &mut AetherApp, ui: &mut egui::Ui) {
-    ui.heading("Properties");
+    ui.heading(
+        app.selected
+            .and_then(|id| app.document.rocket().root.find(id))
+            .map_or("Properties", crate::tree::component_kind_label),
+    );
     ui.add_space(4.0);
 
     let Some(selected_id) = app.selected else {
@@ -37,7 +41,8 @@ pub fn show_properties(app: &mut AetherApp, ui: &mut egui::Ui) {
 
     // Find the index of the selected component (so we can mutate it).
     let idx = app
-        .rocket
+        .document
+        .rocket()
         .root
         .components
         .iter()
@@ -49,7 +54,7 @@ pub fn show_properties(app: &mut AetherApp, ui: &mut egui::Ui) {
     };
 
     // Show a read-only summary first, then editable fields.
-    let component = &mut app.rocket.root.components[idx];
+    let component = &app.document.rocket().root.components[idx];
 
     // We need to mutate the component and then signal the app that it changed.
     // We do this by editing a clone, then writing it back if anything changed.
@@ -76,7 +81,6 @@ pub fn show_properties(app: &mut AetherApp, ui: &mut egui::Ui) {
             changed |= edit_pod(p, ui);
         }
         Component::Coupler(c) => {
-            ui.label("Type: Coupler");
             changed |= edit_length_field(ui, "Length", &mut c.length, 5.0, 500.0);
             changed |= edit_diameter_field(ui, "Outer diameter", &mut c.outer_diameter, 5.0, 200.0);
             changed |= edit_position_field(ui, &mut c.position);
@@ -87,17 +91,39 @@ pub fn show_properties(app: &mut AetherApp, ui: &mut egui::Ui) {
     }
 
     if changed {
-        app.rocket.root.components[idx] = edited;
-        app.mark_dirty();
+        app.edit_component(edited, ui.input(|i| i.pointer.primary_down()));
+        ui.ctx().request_repaint();
+    }
+    if app
+        .document
+        .rocket()
+        .root
+        .motor_mount
+        .as_ref()
+        .is_some_and(|mount| mount.tube == selected_id)
+    {
+        ui.label(
+            egui::RichText::new("Deleting this tube also clears its motor-mount assignment.")
+                .small()
+                .weak(),
+        );
+    }
+    if let Some((id, error)) = &app.edit_error {
+        if *id == selected_id {
+            ui.colored_label(
+                egui::Color32::from_rgb(240, 160, 80),
+                format!("Edit rejected: {error}"),
+            );
+        }
     }
 }
 
 fn edit_nose_cone(nc: &mut NoseCone, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Nose Cone");
     ui.add_space(4.0);
 
     // Shape selector.
+    let previous_shape = nc.shape;
     let shapes = [
         (NoseShape::Conical, "Conical"),
         (NoseShape::TangentOgive, "Tangent Ogive"),
@@ -115,9 +141,7 @@ fn edit_nose_cone(nc: &mut NoseCone, ui: &mut egui::Ui) -> bool {
                 }
             });
     });
-    // Shape changes are hard to detect without PartialEq on NoseShape's
-    // inner fields; assume the combo box always changes if interacted with.
-    // For now, just check length/diameter changes.
+    changed |= nc.shape != previous_shape;
 
     changed |= edit_length_field(ui, "Length", &mut nc.length, 10.0, 300.0);
     changed |= edit_diameter_field(ui, "Base diameter", &mut nc.base_diameter, 5.0, 200.0);
@@ -128,7 +152,6 @@ fn edit_nose_cone(nc: &mut NoseCone, ui: &mut egui::Ui) -> bool {
 
 fn edit_body_tube(bt: &mut BodyTube, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Body Tube");
     ui.add_space(4.0);
 
     changed |= edit_length_field(ui, "Length", &mut bt.length, 10.0, 1000.0);
@@ -148,7 +171,6 @@ fn edit_body_tube(bt: &mut BodyTube, ui: &mut egui::Ui) -> bool {
 
 fn edit_transition(t: &mut Transition, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Transition");
     changed |= edit_length_field(ui, "Length", &mut t.length, 5.0, 300.0);
     changed |= edit_diameter_field(ui, "Fore diameter", &mut t.fore_diameter, 5.0, 200.0);
     changed |= edit_diameter_field(ui, "Aft diameter", &mut t.aft_diameter, 5.0, 200.0);
@@ -158,14 +180,17 @@ fn edit_transition(t: &mut Transition, ui: &mut egui::Ui) -> bool {
 
 fn edit_fin_set(fs: &mut FinSet, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Fin Set");
     ui.add_space(4.0);
 
     // Fin count.
     let prev_count = fs.count;
     ui.horizontal(|ui| {
         ui.label("Fin count:");
-        ui.add(egui::Slider::new(&mut fs.count, 3..=6).integer());
+        ui.add(
+            egui::DragValue::new(&mut fs.count)
+                .range(3..=6)
+                .update_while_editing(false),
+        );
     });
     if fs.count != prev_count {
         changed = true;
@@ -228,7 +253,6 @@ fn edit_fin_set(fs: &mut FinSet, ui: &mut egui::Ui) -> bool {
 
 fn edit_launch_lug(ll: &mut LaunchLug, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Launch Lug");
     changed |= edit_length_field(ui, "Length", &mut ll.length, 5.0, 100.0);
     changed |= edit_diameter_field(ui, "Inner diameter", &mut ll.inner_diameter, 1.0, 20.0);
     changed |= edit_diameter_field(ui, "Outer diameter", &mut ll.outer_diameter, 1.0, 30.0);
@@ -238,7 +262,6 @@ fn edit_launch_lug(ll: &mut LaunchLug, ui: &mut egui::Ui) -> bool {
 
 fn edit_pod(p: &mut Pod, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Pod");
     changed |= edit_length_field(ui, "Length", &mut p.length, 5.0, 300.0);
     changed |= edit_diameter_field(ui, "Outer diameter", &mut p.outer_diameter, 5.0, 100.0);
     changed |= edit_position_field(ui, &mut p.position);
@@ -247,7 +270,6 @@ fn edit_pod(p: &mut Pod, ui: &mut egui::Ui) -> bool {
 
 fn edit_mass_object(mo: &mut MassObject, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    ui.label("Type: Mass Object");
     ui.add_space(4.0);
 
     // Mass (in grams).
@@ -301,14 +323,18 @@ fn edit_length_field(
     let prev = value.as_millimeters();
     let mut mm = prev;
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"))
-            .on_hover_text(format!("Range: {min_mm:.1}–{max_mm:.1} mm"));
-        ui.add(
-            egui::Slider::new(&mut mm, min_mm..=max_mm)
-                .suffix(" mm")
-                .fixed_decimals(1),
-        )
-        .on_hover_text("Drag to adjust, or click to type a value");
+        ui.label(label.trim());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(
+                egui::DragValue::new(&mut mm)
+                    .range(min_mm..=max_mm)
+                    .speed(0.1)
+                    .suffix(" mm")
+                    .fixed_decimals(1)
+                    .update_while_editing(false),
+            )
+            .on_hover_text("Drag to adjust or double-click to type a value");
+        });
     });
     if (mm - prev).abs() > 0.01 {
         *value = Length::millimeters(mm);
@@ -329,22 +355,7 @@ fn edit_diameter_field(
 }
 
 fn edit_position_field(ui: &mut egui::Ui, value: &mut Length) -> bool {
-    let prev = value.as_millimeters();
-    let mut mm = prev;
-    ui.horizontal(|ui| {
-        ui.label("Position (from nose):");
-        ui.add(
-            egui::Slider::new(&mut mm, 0.0..=1000.0)
-                .suffix(" mm")
-                .fixed_decimals(1),
-        );
-    });
-    if (mm - prev).abs() > 0.01 {
-        *value = Length::millimeters(mm);
-        true
-    } else {
-        false
-    }
+    edit_length_field(ui, "Position from nose", value, 0.0, 10000.0)
 }
 
 fn shape_name(shape: &NoseShape) -> &'static str {

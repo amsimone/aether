@@ -51,6 +51,8 @@ impl Vertex {
 /// A triangle mesh: vertices + indices.
 #[derive(Debug, Clone)]
 pub struct Mesh {
+    /// Index ranges identify components for selection and picking.
+    pub parts: Vec<(rocket_core::ComponentId, std::ops::Range<usize>)>,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
 }
@@ -59,6 +61,7 @@ impl Mesh {
     /// Create an empty mesh.
     pub fn new() -> Self {
         Self {
+            parts: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
         }
@@ -164,8 +167,8 @@ pub fn nose_cone_mesh(nc: &NoseCone, color: [f32; 3]) -> Mesh {
             let d = mesh.vertices[ring_verts[ri + 1][si]].position;
             // Two triangles: (a, b, c) and (a, c, d)
             // Wound CCW when viewed from outside.
-            mesh.push_triangle(a, d, c, color);
-            mesh.push_triangle(a, c, b, color);
+            mesh.push_triangle(a, b, c, color);
+            mesh.push_triangle(a, c, d, color);
         }
     }
 
@@ -182,7 +185,7 @@ pub fn nose_cone_mesh(nc: &NoseCone, color: [f32; 3]) -> Mesh {
         let a = mesh.vertices[base_center].position;
         let b = mesh.vertices[base_ring[si]].position;
         let c = mesh.vertices[base_ring[si_next]].position;
-        mesh.push_triangle(a, c, b, color); // Wound for -X normal
+        mesh.push_triangle(a, b, c, color); // Outward +X normal
     }
 
     mesh
@@ -369,8 +372,8 @@ fn cylinder_mesh(length: f32, radius: f32, color: [f32; 3], capped: bool) -> Mes
         let b = mesh.vertices[front_ring[si_next]].position;
         let c = mesh.vertices[back_ring[si_next]].position;
         let d = mesh.vertices[back_ring[si]].position;
-        mesh.push_triangle(a, d, c, color);
-        mesh.push_triangle(a, c, b, color);
+        mesh.push_triangle(a, b, c, color);
+        mesh.push_triangle(a, c, d, color);
     }
 
     if capped {
@@ -453,8 +456,8 @@ fn frustrum_mesh(length: f32, fore_radius: f32, aft_radius: f32, color: [f32; 3]
         let b = mesh.vertices[front_ring[si_next]].position;
         let c = mesh.vertices[back_ring[si_next]].position;
         let d = mesh.vertices[back_ring[si]].position;
-        mesh.push_triangle(a, d, c, color);
-        mesh.push_triangle(a, c, b, color);
+        mesh.push_triangle(a, b, c, color);
+        mesh.push_triangle(a, c, d, color);
     }
 
     mesh
@@ -470,39 +473,32 @@ pub fn build_rocket_mesh(rocket: &rocket_core::Rocket) -> Mesh {
 
     // Default colors per component type (will be replaced by material-based
     // coloring in a future iteration).
-    let nose_color = [0.85, 0.15, 0.15]; // red
-    let body_color = [0.20, 0.45, 0.90]; // blue
-    let fin_color = [0.15, 0.75, 0.20]; // green
+    let nose_color = [0.92, 0.55, 0.25]; // red
+    let body_color = [0.78, 0.84, 0.91]; // blue
+    let fin_color = [0.28, 0.57, 0.67]; // green
     let transition_color = [0.80, 0.25, 0.75]; // magenta
     let lug_color = [0.50, 0.50, 0.50]; // gray
     let pod_color = [0.90, 0.80, 0.15]; // yellow
     let mass_color = [0.30, 0.30, 0.30]; // dark gray
-
-    // Track body tube radii so fin sets can be positioned correctly.
-    let mut body_radius_at: Vec<(f32, f32)> = Vec::new(); // (x_position, radius)
 
     for component in rocket.root.iter() {
         let pos = component.position().as_meters() as f32;
 
         let (submesh, _color) = match component {
             Component::NoseCone(nc) => (nose_cone_mesh(nc, nose_color), nose_color),
-            Component::BodyTube(bt) => {
-                body_radius_at.push((pos, (bt.outer_diameter.as_meters() / 2.0) as f32));
-                body_radius_at.push((
-                    pos + bt.length.as_meters() as f32,
-                    (bt.outer_diameter.as_meters() / 2.0) as f32,
-                ));
-                (body_tube_mesh(bt, body_color, false), body_color)
-            }
+            Component::BodyTube(bt) => (body_tube_mesh(bt, body_color, false), body_color),
             Component::Transition(t) => (transition_mesh(t, transition_color), transition_color),
             Component::FinSet(fs) => {
-                // Find the body radius at the fin's position.
-                let r = body_radius_at
-                    .iter()
-                    .filter(|(x, _)| *x <= pos)
-                    .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(_, r)| *r)
-                    .unwrap_or(0.0125); // default 25mm diameter
+                let r = rocket
+                    .root
+                    .find(fs.mount)
+                    .and_then(|c| match c {
+                        Component::BodyTube(body) => {
+                            Some((body.outer_diameter.as_meters() / 2.0) as f32)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(0.0125);
                 (fin_set_mesh(fs, r, fin_color), fin_color)
             }
             Component::LaunchLug(ll) => (launch_lug_mesh(ll, lug_color), lug_color),
@@ -510,82 +506,50 @@ pub fn build_rocket_mesh(rocket: &rocket_core::Rocket) -> Mesh {
             Component::MassObject(_) => {
                 // Render as a small cube to make it visible.
                 let mut m = Mesh::new();
-                let s = 0.01_f32; // 1cm cube
+                let s = 0.005_f32; // 10 mm proxy, small enough to fit inside the reference body
                 let cube_color = mass_color;
-                // Simple cube (6 faces).
-                let v = |x: f32, y: f32, z: f32| [pos + x * s, y * s, z * s];
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(1.0, -1.0, -1.0),
-                    v(1.0, 1.0, -1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(1.0, 1.0, -1.0),
-                    v(-1.0, 1.0, -1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, 1.0),
-                    v(1.0, 1.0, 1.0),
-                    v(1.0, -1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, 1.0),
-                    v(-1.0, 1.0, 1.0),
-                    v(1.0, 1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, 1.0, -1.0),
-                    v(1.0, 1.0, 1.0),
-                    v(1.0, 1.0, -1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, 1.0, -1.0),
-                    v(-1.0, 1.0, 1.0),
-                    v(1.0, 1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(1.0, -1.0, 1.0),
-                    v(1.0, -1.0, -1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(-1.0, -1.0, 1.0),
-                    v(1.0, -1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(-1.0, 1.0, 1.0),
-                    v(-1.0, 1.0, -1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(-1.0, -1.0, -1.0),
-                    v(-1.0, -1.0, 1.0),
-                    v(-1.0, 1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(1.0, -1.0, -1.0),
-                    v(1.0, 1.0, 1.0),
-                    v(1.0, -1.0, 1.0),
-                    cube_color,
-                );
-                m.push_triangle(
-                    v(1.0, -1.0, -1.0),
-                    v(1.0, 1.0, -1.0),
-                    v(1.0, 1.0, 1.0),
-                    cube_color,
-                );
+                let v = |x: f32, y: f32, z: f32| [x * s, y * s, z * s];
+                for [a, b, c, d] in [
+                    [
+                        v(-1., -1., -1.),
+                        v(-1., 1., -1.),
+                        v(1., 1., -1.),
+                        v(1., -1., -1.),
+                    ],
+                    [
+                        v(-1., -1., 1.),
+                        v(1., -1., 1.),
+                        v(1., 1., 1.),
+                        v(-1., 1., 1.),
+                    ],
+                    [
+                        v(-1., 1., -1.),
+                        v(-1., 1., 1.),
+                        v(1., 1., 1.),
+                        v(1., 1., -1.),
+                    ],
+                    [
+                        v(-1., -1., -1.),
+                        v(1., -1., -1.),
+                        v(1., -1., 1.),
+                        v(-1., -1., 1.),
+                    ],
+                    [
+                        v(1., -1., -1.),
+                        v(1., 1., -1.),
+                        v(1., 1., 1.),
+                        v(1., -1., 1.),
+                    ],
+                    [
+                        v(-1., -1., -1.),
+                        v(-1., -1., 1.),
+                        v(-1., 1., 1.),
+                        v(-1., 1., -1.),
+                    ],
+                ] {
+                    m.push_triangle(a, b, c, cube_color);
+                    m.push_triangle(a, c, d, cube_color);
+                }
                 (m, cube_color)
             }
             Component::Coupler(c) => (
@@ -599,18 +563,49 @@ pub fn build_rocket_mesh(rocket: &rocket_core::Rocket) -> Mesh {
             ),
         };
 
+        let (offset_y, offset_z) = match component {
+            Component::LaunchLug(lug) => {
+                let radius = rocket
+                    .root
+                    .iter()
+                    .find_map(|c| match c {
+                        Component::BodyTube(body)
+                            if pos >= body.position.as_meters() as f32
+                                && pos <= (body.position + body.length).as_meters() as f32 =>
+                        {
+                            Some(body.outer_diameter.as_meters() as f32 * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(0.0125);
+                (radius + lug.outer_diameter.as_meters() as f32 * 0.5, 0.0)
+            }
+            Component::Pod(pod) => (
+                (pod.radial_offset.as_meters() * pod.angle.cos()) as f32,
+                (pod.radial_offset.as_meters() * pod.angle.sin()) as f32,
+            ),
+            _ => (0.0, 0.0),
+        };
         // Translate the submesh by the component's axial position.
         // (Nose cones and other components generated at origin need this.)
         let mut translated = Mesh::new();
         for v in &submesh.vertices {
             translated.vertices.push(Vertex {
-                position: [v.position[0] + pos, v.position[1], v.position[2]],
+                position: [
+                    v.position[0] + pos,
+                    v.position[1] + offset_y,
+                    v.position[2] + offset_z,
+                ],
                 normal: v.normal,
                 color: v.color,
             });
         }
         translated.indices = submesh.indices.clone();
+        let start = combined.indices.len();
         combined.append(&translated);
+        combined
+            .parts
+            .push((component.id(), start..combined.indices.len()));
     }
 
     combined
@@ -693,5 +688,75 @@ mod tests {
         let mesh = build_rocket_mesh(&rocket);
         assert_eq!(mesh.vertices.len(), 0);
         assert_eq!(mesh.indices.len(), 0);
+    }
+    #[test]
+    fn body_and_nose_surfaces_face_outward() {
+        let body = BodyTube {
+            id: ComponentId::new(1),
+            position: Length::ZERO,
+            material: ComponentId::new(5),
+            length: Length::millimeters(180.0),
+            outer_diameter: Length::millimeters(25.0),
+            inner_diameter: Length::millimeters(24.0),
+        };
+        let nose = NoseCone {
+            id: ComponentId::new(2),
+            position: Length::ZERO,
+            material: ComponentId::new(1),
+            shape: NoseShape::TangentOgive,
+            length: Length::millimeters(70.0),
+            base_diameter: Length::millimeters(25.0),
+            wall_thickness: Length::ZERO,
+        };
+        for mesh in [
+            body_tube_mesh(&body, [1.0; 3], false),
+            nose_cone_mesh(&nose, [1.0; 3]),
+        ] {
+            for index in &mesh.indices {
+                let vertex = mesh.vertices[*index as usize];
+                let radial_dot =
+                    vertex.position[1] * vertex.normal[1] + vertex.position[2] * vertex.normal[2];
+                assert!(
+                    radial_dot >= -1e-7,
+                    "back-face culling must preserve exterior surfaces"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mass_object_is_translated_once() {
+        let mut rocket = Rocket::new("Mass location");
+        rocket
+            .root
+            .push(Component::MassObject(rocket_core::MassObject {
+                id: ComponentId::new(1),
+                position: Length::millimeters(85.0),
+                mass: rocket_core::Mass::grams(8.0),
+                kind: rocket_core::MassObjectKind::Recovery,
+            }));
+        let mesh = build_rocket_mesh(&rocket);
+        let min_x = mesh
+            .vertices
+            .iter()
+            .map(|v| v.position[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = mesh
+            .vertices
+            .iter()
+            .map(|v| v.position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((min_x.midpoint(max_x) - 0.085).abs() < 1e-6);
+        for vertex in &mesh.vertices {
+            let p = [
+                vertex.position[0] - 0.085,
+                vertex.position[1],
+                vertex.position[2],
+            ];
+            assert!(
+                p.iter().zip(vertex.normal).map(|(p, n)| p * n).sum::<f32>() > 0.0,
+                "mass proxy faces must point outward"
+            );
+        }
     }
 }

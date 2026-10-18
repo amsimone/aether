@@ -31,10 +31,16 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
     ui.heading("Stability");
     ui.add_space(4.0);
 
-    let mp = app.rocket.mass_properties();
-    let aero = estimate(&app.rocket);
-    let sm = static_margin(&app.rocket);
-    let rocket_length = app.rocket.root.length().as_millimeters().max(1.0);
+    let mp = app.document.rocket().mass_properties();
+    let aero = estimate(app.document.rocket());
+    let sm = static_margin(app.document.rocket());
+    let rocket_length = app
+        .document
+        .rocket()
+        .root
+        .length()
+        .as_millimeters()
+        .max(1.0);
     let cg_mm = mp.cg_x.as_millimeters();
 
     // CP is now computed by the design-time aero estimate.
@@ -57,23 +63,6 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("CG (from nose):");
         ui.label(format!("{:.1} mm", cg_mm));
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("I_axial:");
-        ui.label(format!("{:.4} kg·m²", mp.i_axial));
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("I_transverse:");
-        ui.label(format!("{:.4} kg·m²", mp.i_transverse));
-    });
-
-    ui.add_space(4.0);
-
-    ui.horizontal(|ui| {
-        ui.label("C_Nα:");
-        ui.label(format!("{:.2} /rad", aero.cn_alpha));
     });
 
     if let Some(cp) = cp_mm {
@@ -202,6 +191,25 @@ pub fn show_stability_gauge(app: &mut AetherApp, ui: &mut egui::Ui) {
     }
 
     ui.add_space(4.0);
+
+    ui.collapsing("Advanced mass & aero", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("I_axial:");
+            ui.label(format!("{:.4} kg·m²", mp.i_axial));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("I_transverse:");
+            ui.label(format!("{:.4} kg·m²", mp.i_transverse));
+        });
+
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("C_Nα:");
+            ui.label(format!("{:.2} /rad", aero.cn_alpha));
+        });
+    });
 
     // Design-estimate label.
     ui.label(

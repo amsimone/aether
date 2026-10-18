@@ -9,8 +9,13 @@ repository.workspace = true
 
 [dependencies]
 rocket-core = { path = "../rocket-core", version = "0.1.0" }
+rocket-sim = { path = "../rocket-sim", version = "0.1.0" }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+tempfile = "3"
+
+[dev-dependencies]
+rocket-motors = { path = "../rocket-motors", version = "0.1.0", default-features = false }
 
 [lints]
 workspace = true

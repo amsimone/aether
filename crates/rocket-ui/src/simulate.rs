@@ -1,308 +1,248 @@
-//! The simulate panel: motor selection, sim config, run button, results.
-//!
-//! Phase 3: uses the 6-DOF simulator with quaternion attitude, recovery
-//! events, and full aero coefficients.
+//! Case editing and execution; widgets do not own engineering settings.
+#![allow(clippy::too_many_lines)]
 
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::similar_names,
-    clippy::needless_pass_by_value,
-    clippy::too_many_lines
-)]
-
+use crate::{app::AetherApp, plots};
 use eframe::egui;
-use rocket_core::Length;
+use rocket_core::{Length, Rocket};
+use rocket_io::Project;
 use rocket_motors::Motor;
-use rocket_sim::{RecoveryState, SimConfig, SimResult, Simulator6Dof};
+use rocket_sim::SimResult;
 
-use crate::app::AetherApp;
-use crate::plots;
+const BUILTIN_MOTORS: &[&str] = &[
+    include_str!("../../../tests/fixtures/motors/estes_a8_3.eng"),
+    include_str!("../../../tests/fixtures/motors/estes_b6.eng"),
+    include_str!("../../../tests/fixtures/motors/estes_c6.eng"),
+];
 
-/// Built-in motor fixtures available for simulation.
-/// These are loaded from the tests/fixtures/motors/ directory.
-const BUILTIN_MOTORS: &[&str] = &["estes_a8_3.eng", "estes_b6.eng", "estes_c6.eng"];
-
-/// The sim panel state, stored in [`AetherApp`].
+/// Transient presentation state. All run inputs live in the document's case.
+#[derive(Default)]
 pub struct SimPanelState {
-    /// Index of the selected motor in the available list.
-    pub selected_motor: usize,
-    /// Available motors loaded from fixtures.
     pub available_motors: Vec<(String, Motor)>,
-    /// Launch angle in degrees from vertical.
-    pub launch_angle_deg: f64,
-    /// Pad altitude in meters.
-    pub pad_altitude_m: f64,
-    /// Wind speed in m/s.
-    pub wind_speed: f64,
-    /// Wind direction in degrees (0 = downrange, 90 = cross-range).
-    pub wind_dir_deg: f64,
-    /// Main chute deployment altitude (m AGL).
-    pub main_altitude_m: f64,
-    /// Main chute drag area (Cd · A, m²).
-    pub main_cd_a: f64,
-    /// Drogue chute drag area (Cd · A, m²).
-    pub drogue_cd_a: f64,
-    /// The last simulation result (if any).
     pub result: Option<SimResult>,
-    /// Whether a sim is currently running.
-    pub running: bool,
-    /// Playback time slider position (seconds).
     pub playback_time: f64,
+    pub error: Option<String>,
 }
-
-impl Default for SimPanelState {
-    fn default() -> Self {
-        let recovery = RecoveryState::default_lpr();
-        Self {
-            selected_motor: 0,
-            available_motors: Vec::new(),
-            launch_angle_deg: 0.0,
-            pad_altitude_m: 0.0,
-            wind_speed: 0.0,
-            wind_dir_deg: 0.0,
-            main_altitude_m: recovery.main_altitude,
-            main_cd_a: recovery.main_cd_a,
-            drogue_cd_a: recovery.drogue_cd_a,
-            result: None,
-            running: false,
-            playback_time: 0.0,
-        }
-    }
-}
-
 impl SimPanelState {
-    /// Load the built-in motor fixtures from the tests/fixtures/motors/ directory.
     pub fn load_builtin_motors(&mut self) {
         if !self.available_motors.is_empty() {
             return;
         }
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let fixtures_dir = std::path::Path::new(manifest_dir)
-            .join("..")
-            .join("..")
-            .join("tests")
-            .join("fixtures")
-            .join("motors");
-
-        for name in BUILTIN_MOTORS {
-            let path = fixtures_dir.join(name);
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(motor) = rocket_motors::rasp::parse(&text) {
-                    let display = format!(
-                        "{} ({} {:.1}g, {:.1}Ns)",
+        for text in BUILTIN_MOTORS {
+            if let Ok(motor) = rocket_motors::rasp::parse(text) {
+                self.available_motors.push((
+                    format!(
+                        "{} · {} · {:.1} N·s",
                         motor.designation,
                         motor.manufacturer,
-                        motor.total_mass.as_grams(),
                         motor.total_impulse()
-                    );
-                    self.available_motors.push((display, motor));
-                }
+                    ),
+                    motor,
+                ));
             }
-        }
-    }
-
-    /// Build a [`SimConfig`] from the panel state.
-    fn build_config(&self) -> SimConfig {
-        let wind_rad = self.wind_dir_deg.to_radians();
-        SimConfig {
-            launch_angle: self.launch_angle_deg.to_radians(),
-            pad_altitude: Length::meters(self.pad_altitude_m),
-            wind: (
-                self.wind_speed * wind_rad.cos(),
-                self.wind_speed * wind_rad.sin(),
-                0.0,
-            ),
-            ..SimConfig::default()
-        }
-    }
-
-    /// Build a [`RecoveryState`] from the panel state.
-    fn build_recovery(&self) -> RecoveryState {
-        RecoveryState {
-            main_altitude: self.main_altitude_m,
-            main_cd_a: self.main_cd_a,
-            drogue_cd_a: self.drogue_cd_a,
-            ..RecoveryState::default_lpr()
         }
     }
 }
 
-/// Show the simulate panel in the right sidebar.
+/// New editor documents explicitly resolve the first reference motor.
+/// Legacy imports use the I/O migration with an unresolved motor instead.
+pub fn reference_project(rocket: Rocket) -> Project {
+    let mut project = Project::from_rocket(rocket);
+    project.case.motor = rocket_motors::rasp::parse(BUILTIN_MOTORS[0]).ok();
+    project
+}
+
 pub fn show_simulate_panel(app: &mut AetherApp, ui: &mut egui::Ui) {
-    ui.heading("🚀 Simulate");
-    ui.add_space(4.0);
-
-    let sim_state = &mut app.sim_panel;
-    sim_state.load_builtin_motors();
-
-    // ---- Motor selector ----
-    ui.label("Motor:");
-    if sim_state.available_motors.is_empty() {
-        ui.label(
-            egui::RichText::new("No motors found (fixtures missing)")
-                .color(egui::Color32::from_rgb(0xf0, 0x60, 0x60)),
-        );
-    } else {
-        egui::ComboBox::from_id_salt("motor_selector")
-            .selected_text(
-                sim_state
-                    .available_motors
-                    .get(sim_state.selected_motor)
-                    .map_or("Select motor", |(name, _)| name.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                for (i, (name, _)) in sim_state.available_motors.iter().enumerate() {
-                    ui.selectable_value(&mut sim_state.selected_motor, i, name);
+    ui.heading("Flight case");
+    ui.label(
+        egui::RichText::new("Case settings and the motor curve are saved with this project.")
+            .small()
+            .weak(),
+    );
+    app.sim_panel.load_builtin_motors();
+    let mut case = app.document.case().clone();
+    ui.label("Case name");
+    let name_edit = ui.text_edit_singleline(&mut case.name);
+    ui.label("Motor");
+    let selected = case.motor.as_ref().map_or_else(
+        || "Select a motor".into(),
+        |m| format!("{} · {}", m.designation, m.manufacturer),
+    );
+    egui::ComboBox::from_id_salt("motor_selector")
+        .width(ui.available_width() - 16.0)
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for (label, motor) in &app.sim_panel.available_motors {
+                let chosen = case.motor.as_ref() == Some(motor);
+                if ui.selectable_label(chosen, label).clicked() {
+                    case.motor = Some(motor.clone());
+                    ui.close();
                 }
-            });
-    }
-    ui.add_space(4.0);
-
-    // ---- Launch configuration ----
-    ui.label("Launch Configuration:");
-    ui.horizontal(|ui| {
-        ui.label("Angle from vertical:");
-        ui.add(
-            egui::Slider::new(&mut sim_state.launch_angle_deg, 0.0..=15.0)
-                .suffix("°")
-                .fixed_decimals(1),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Pad altitude:");
-        ui.add(
-            egui::Slider::new(&mut sim_state.pad_altitude_m, 0.0..=3000.0)
-                .suffix(" m")
-                .fixed_decimals(0),
-        );
-    });
-    ui.add_space(4.0);
-
-    // ---- Wind ----
-    ui.label("Wind:");
-    ui.horizontal(|ui| {
-        ui.label("Speed:");
-        ui.add(
-            egui::Slider::new(&mut sim_state.wind_speed, 0.0..=20.0)
-                .suffix(" m/s")
-                .fixed_decimals(1),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Direction:");
-        ui.add(
-            egui::Slider::new(&mut sim_state.wind_dir_deg, 0.0..=360.0)
-                .suffix("°")
-                .fixed_decimals(0),
-        );
-    });
-    ui.add_space(8.0);
-
-    // ---- Recovery config ----
-    ui.collapsing("🪂 Recovery", |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Main deploy altitude:");
-            ui.add(
-                egui::Slider::new(&mut sim_state.main_altitude_m, 10.0..=500.0)
-                    .suffix(" m")
-                    .fixed_decimals(0),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Main chute Cd·A:");
-            ui.add(egui::Slider::new(&mut sim_state.main_cd_a, 0.1..=5.0).fixed_decimals(2));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Drogue Cd·A:");
-            ui.add(egui::Slider::new(&mut sim_state.drogue_cd_a, 0.01..=1.0).fixed_decimals(2));
-        });
-    });
-    ui.add_space(8.0);
-
-    // ---- Run button ----
-    // Collect what we need before the mutable borrow of sim_panel ends.
-    let run_clicked = !sim_state.available_motors.is_empty()
-        && !sim_state.running
-        && ui
-            .add(
-                egui::Button::new("▶ Run Simulation")
-                    .fill(egui::Color32::from_rgb(0x2a, 0x6a, 0x3a))
-                    .min_size(egui::vec2(ui.available_width(), 32.0)),
-            )
-            .clicked();
-
-    if run_clicked {
-        run_simulation(app);
-    }
-
-    ui.add_space(8.0);
-
-    // ---- Results ----
-    // Clone what we need to avoid holding a borrow of app.sim_panel.
-    let result_opt = app.sim_panel.result.clone();
-    if let Some(result) = &result_opt {
-        show_results(ui, result);
-        ui.add_space(8.0);
-
-        // ---- Playback slider ----
-        let max_t = result.landing_time.as_seconds();
-        if max_t > 0.0 {
-            let mut playback = app.sim_panel.playback_time;
-            ui.horizontal(|ui| {
-                ui.label("Playback:");
-                ui.add(
-                    egui::Slider::new(&mut playback, 0.0..=max_t)
-                        .suffix(" s")
-                        .fixed_decimals(2),
-                );
-            });
-            app.sim_panel.playback_time = playback;
-
-            // Show the telemetry at the playback time.
-            if let Some(tp) = result.telemetry_at(rocket_core::Duration::seconds(playback)) {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "t={:.2}s  z={:.1}m  v={:.1}m/s  T={:.1}N",
-                        tp.time.as_seconds(),
-                        tp.position.2,
-                        (tp.velocity.0.powi(2) + tp.velocity.1.powi(2) + tp.velocity.2.powi(2))
-                            .sqrt(),
-                        tp.thrust.as_newtons()
-                    ));
-                });
             }
+        });
+    if case.motor.is_none() {
+        ui.label("Imported designs need a motor selection before running.");
+    }
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Launch and environment").strong());
+    let mut angle = case.config.launch_angle.to_degrees();
+    if number(ui, "Angle from vertical", &mut angle, 0.0..=89.0, "°") {
+        case.config.launch_angle = angle.to_radians();
+    }
+    let mut altitude = case.config.pad_altitude.as_meters();
+    if number(
+        ui,
+        "Pad altitude (MSL)",
+        &mut altitude,
+        -500.0..=20_000.0,
+        " m",
+    ) {
+        case.config.pad_altitude = Length::meters(altitude);
+    }
+    number(
+        ui,
+        "Wind X (downrange)",
+        &mut case.config.wind.0,
+        -200.0..=200.0,
+        " m/s",
+    );
+    number(
+        ui,
+        "Wind Y (cross-range)",
+        &mut case.config.wind.1,
+        -200.0..=200.0,
+        " m/s",
+    );
+    number(
+        ui,
+        "Wind Z (up)",
+        &mut case.config.wind.2,
+        -200.0..=200.0,
+        " m/s",
+    );
+    ui.collapsing("Recovery", |ui| {
+        ui.label("Drogue at apogee; main on descent.");
+        number(
+            ui,
+            "Main deploy (AGL)",
+            &mut case.recovery.main_altitude_m,
+            0.0..=10_000.0,
+            " m",
+        );
+        number(
+            ui,
+            "Main Cd·A",
+            &mut case.recovery.main_cd_a,
+            0.0..=100.0,
+            " m²",
+        );
+        number(
+            ui,
+            "Drogue Cd·A",
+            &mut case.recovery.drogue_cd_a,
+            0.0..=100.0,
+            " m²",
+        );
+    });
+    ui.collapsing("Models and numerics", |ui| {
+        ui.label("Rigid 6-DOF · built-in aero v1");
+        ui.label("ISA · constant gravity · fixed-step RK4");
+        number(
+            ui,
+            "Integration step",
+            &mut case.config.time_step,
+            0.0001..=0.1,
+            " s",
+        );
+        number(
+            ui,
+            "Telemetry interval",
+            &mut case.config.telemetry_interval,
+            0.0001..=10.0,
+            " s",
+        );
+        number(
+            ui,
+            "Maximum duration",
+            &mut case.maximum_duration_s,
+            0.1..=3600.0,
+            " s",
+        );
+    });
+    if case != *app.document.case() {
+        match app.document.edit_case(
+            case,
+            name_edit.has_focus() || ui.input(|i| i.pointer.primary_down()),
+        ) {
+            Ok(true) => {
+                app.mark_dirty();
+                app.sim_panel.error = None;
+            }
+            Ok(false) => {}
+            Err(error) => app.sim_panel.error = Some(format!("Edit rejected: {error}")),
         }
-
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        // ---- Plots ----
-        ui.label(egui::RichText::new("Flight Profile").strong());
-        plots::show_altitude_plot(ui, result);
-        ui.add_space(4.0);
-        plots::show_velocity_plot(ui, result);
-        ui.add_space(4.0);
-        plots::show_thrust_plot(ui, result);
+        ui.ctx().request_repaint();
+    }
+    if let Some(error) = &app.sim_panel.error {
+        ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
+    ui.add_space(8.0);
+    if ui
+        .add_enabled(
+            app.document.case().motor.is_some(),
+            egui::Button::new("Run case").min_size(egui::vec2(ui.available_width(), 32.0)),
+        )
+        .clicked()
+    {
+        match app.document.case().run(app.document.rocket()) {
+            Ok(result) => {
+                app.sim_panel.result = Some(result);
+                app.sim_panel.playback_time = 0.0;
+                app.sim_panel.error = None;
+            }
+            Err(error) => app.sim_panel.error = Some(error.to_string()),
+        }
+    }
+    let result = app.sim_panel.result.clone();
+    if let Some(result) = result {
+        ui.add_space(8.0);
+        show_results(ui, &result);
+        ui.add(
+            egui::Slider::new(
+                &mut app.sim_panel.playback_time,
+                0.0..=result.landing_time.as_seconds(),
+            )
+            .text("Time")
+            .suffix(" s"),
+        );
+        plots::show_altitude_plot(ui, &result);
+        plots::show_velocity_plot(ui, &result);
+        plots::show_thrust_plot(ui, &result);
     }
 }
 
-/// Run the simulation and store the result.
-fn run_simulation(app: &mut AetherApp) {
-    let sim_state = &mut app.sim_panel;
-    let motor = match sim_state.available_motors.get(sim_state.selected_motor) {
-        Some((_, m)) => m.clone(),
-        None => return,
-    };
-    let config = sim_state.build_config();
-    let recovery = sim_state.build_recovery();
-
-    sim_state.running = true;
-    let sim = Simulator6Dof::new(app.rocket.clone(), motor, config).with_recovery(recovery);
-    let result = sim.run();
-    sim_state.running = false;
-    sim_state.result = Some(result);
-    sim_state.playback_time = 0.0;
+fn number(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    suffix: &str,
+) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(
+                egui::DragValue::new(value)
+                    .speed(0.01)
+                    .range(range)
+                    .suffix(suffix)
+                    .max_decimals(4)
+                    .update_while_editing(false),
+            )
+            .changed()
+        })
+        .inner
+    })
+    .inner
 }
 
 /// Show the simulation results summary.
@@ -333,12 +273,12 @@ fn show_results(ui: &mut egui::Ui, result: &SimResult) {
     );
     result_row(
         ui,
-        "Landing time:",
+        "Run end time:",
         &format!("{:.2} s", result.landing_time.as_seconds()),
     );
     result_row(
         ui,
-        "Landing distance:",
+        "End distance:",
         &format!(
             "{:.1} m",
             (result.landing_position.0.powi(2) + result.landing_position.1.powi(2)).sqrt()
@@ -358,4 +298,26 @@ fn result_row(ui: &mut egui::Ui, label: &str, value: &str) {
             );
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn reference_case_is_portable_and_can_run_offline() {
+        let mut panel = SimPanelState::default();
+        panel.load_builtin_motors();
+        panel.load_builtin_motors();
+        assert_eq!(panel.available_motors.len(), 3);
+        let example = rocket_io::load_project_from_json(include_str!(
+            "../../../examples/aether-one-project.rocket"
+        ))
+        .expect("portable example");
+        let reference = reference_project(crate::reference::reference_rocket());
+        assert_eq!(example, reference);
+        let result = example.case.run(&example.rocket).expect("reference run");
+        assert!(result.max_altitude.as_meters().is_finite());
+        assert!(result.max_altitude.as_meters() > 10.0);
+        assert!(result.landing_time.as_seconds() > result.apogee_time.as_seconds());
+    }
 }

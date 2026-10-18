@@ -233,24 +233,16 @@ fn recovery_descent_rate_matches_terminal_velocity() {
     let descent_speed =
         (last.velocity.0.powi(2) + last.velocity.1.powi(2) + last.velocity.2.powi(2)).sqrt();
 
-    // Terminal velocity: v = sqrt(2mg / (rho · Cd · A))
-    // m ≈ 0.026 kg (dry + motor), g = 9.8, rho = 1.225, Cd·A = 0.5
-    // v = sqrt(2 · 0.026 · 9.8 / (1.225 · 0.5)) = sqrt(0.51 / 0.61) ≈ 0.91 m/s
-    // Wait, that's too slow. Let me recalculate:
-    // v = sqrt(2 · 0.026 · 9.8 / (1.225 · 0.5)) = sqrt(0.5096 / 0.6125) = sqrt(0.832) ≈ 0.91 m/s
-    // Hmm, with Cd·A=0.5 the descent is very slow. Let me check the
-    // actual descent rate from the sim.
-    eprintln!("descent speed near landing: {descent_speed:.2} m/s");
-
-    // The descent rate should be reasonable (not lawn-dart, not floating).
-    assert!(
-        descent_speed < 20.0,
-        "descent rate with chute should be < 20 m/s, got {descent_speed:.1}"
-    );
-    assert!(
-        descent_speed > 0.1,
-        "descent rate should be > 0.1 m/s (not hovering), got {descent_speed:.2}"
-    );
+    let rho = rocket_physics::IsaAtmosphere::new()
+        .at(Length::meters(last.position.2))
+        .density
+        .as_kilograms_per_cubic_meter();
+    let expected = (2.0 * last.mass.as_kilograms() * 9.80665 / (rho * recovery.main_cd_a)).sqrt();
+    let relative_error = (descent_speed - expected).abs() / expected;
+    // Small body-aerodynamic and density-gradient effects are permitted;
+    // an erroneous factor of two in parachute force produces about 29% error.
+    assert!(relative_error < 0.02,
+        "terminal descent speed {descent_speed:.4} m/s should match {expected:.4} m/s within 2%; error {relative_error:.4}");
 }
 
 #[test]

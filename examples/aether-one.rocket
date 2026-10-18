@@ -1,0 +1,66 @@
+{
+  "name": "Aether One",
+  "version": 1,
+  "root": {
+    "components": [
+      {
+        "type": "nose_cone",
+        "id": 1,
+        "position": 0,
+        "material": 1,
+        "shape": {
+          "kind": "tangent_ogive"
+        },
+        "length": 0.07,
+        "base_diameter": 0.0248,
+        "wall_thickness": 0.001
+      },
+      {
+        "type": "body_tube",
+        "id": 2,
+        "position": 0.07,
+        "material": 5,
+        "length": 0.18,
+        "outer_diameter": 0.0248,
+        "inner_diameter": 0.0241
+      },
+      {
+        "type": "fin_set",
+        "id": 3,
+        "position": 0.2,
+        "material": 1,
+        "count": 3,
+        "planform": {
+          "kind": "trapezoidal",
+          "root_chord": 0.05,
+          "tip_chord": 0.025,
+          "span": 0.035,
+          "sweep": 0.025
+        },
+        "thickness": 0.002,
+        "airfoil": "square",
+        "mount": 2
+      },
+      {
+        "type": "launch_lug",
+        "id": 4,
+        "position": 0.11,
+        "material": 5,
+        "length": 0.025,
+        "outer_diameter": 0.007,
+        "inner_diameter": 0.005
+      },
+      {
+        "type": "mass_object",
+        "id": 5,
+        "position": 0.085,
+        "mass": 0.008,
+        "kind": "recovery"
+      }
+    ],
+    "motor_mount": {
+      "tube": 2,
+      "inner_diameter": 0.018
+    }
+  }
+}

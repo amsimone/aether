@@ -1,0 +1,211 @@
+{
+  "version": 2,
+  "rocket": {
+    "name": "Aether One",
+    "version": 1,
+    "root": {
+      "components": [
+        {
+          "type": "nose_cone",
+          "id": 1,
+          "position": 0,
+          "material": 1,
+          "shape": {
+            "kind": "tangent_ogive"
+          },
+          "length": 0.07,
+          "base_diameter": 0.0248,
+          "wall_thickness": 0.001
+        },
+        {
+          "type": "body_tube",
+          "id": 2,
+          "position": 0.07,
+          "material": 5,
+          "length": 0.18,
+          "outer_diameter": 0.0248,
+          "inner_diameter": 0.0241
+        },
+        {
+          "type": "fin_set",
+          "id": 3,
+          "position": 0.2,
+          "material": 1,
+          "count": 3,
+          "planform": {
+            "kind": "trapezoidal",
+            "root_chord": 0.05,
+            "tip_chord": 0.025,
+            "span": 0.035,
+            "sweep": 0.025
+          },
+          "thickness": 0.002,
+          "airfoil": "square",
+          "mount": 2
+        },
+        {
+          "type": "launch_lug",
+          "id": 4,
+          "position": 0.11,
+          "material": 5,
+          "length": 0.025,
+          "outer_diameter": 0.007,
+          "inner_diameter": 0.005
+        },
+        {
+          "type": "mass_object",
+          "id": 5,
+          "position": 0.085,
+          "mass": 0.008,
+          "kind": "recovery"
+        }
+      ],
+      "motor_mount": {
+        "tube": 2,
+        "inner_diameter": 0.018
+      }
+    }
+  },
+  "case": {
+    "name": "Nominal",
+    "motor": {
+      "designation": "A8",
+      "manufacturer": "Estes",
+      "comment": [
+        "Estes A8 RASP.ENG file \u2014 public domain",
+        "Source: ThrustCurve.org (license: PD)",
+        "Motor ID: 5f4294d2000231000000000b",
+        "Downloaded: 2026-10-18"
+      ],
+      "diameter": 0.018000000000000002,
+      "length": 0.07,
+      "delays": [
+        0.0,
+        3.0,
+        5.0
+      ],
+      "propellant_mass": 0.00384,
+      "total_mass": 0.01389,
+      "thrust_curve": [
+        [
+          0.016,
+          1.08
+        ],
+        [
+          0.036,
+          0.293
+        ],
+        [
+          0.05,
+          0.259
+        ],
+        [
+          0.06,
+          0.357
+        ],
+        [
+          0.07,
+          0.419
+        ],
+        [
+          0.08,
+          0.355
+        ],
+        [
+          0.102,
+          0.781
+        ],
+        [
+          0.124,
+          1.443
+        ],
+        [
+          0.152,
+          2.966
+        ],
+        [
+          0.17,
+          4.426
+        ],
+        [
+          0.202,
+          7.16
+        ],
+        [
+          0.224,
+          9.051
+        ],
+        [
+          0.246,
+          9.555
+        ],
+        [
+          0.256,
+          9.317
+        ],
+        [
+          0.276,
+          7.958
+        ],
+        [
+          0.294,
+          6.108
+        ],
+        [
+          0.326,
+          4.235
+        ],
+        [
+          0.35,
+          3.813
+        ],
+        [
+          0.376,
+          3.997
+        ],
+        [
+          0.41,
+          3.926
+        ],
+        [
+          0.452,
+          3.724
+        ],
+        [
+          0.474,
+          4.046
+        ],
+        [
+          0.502,
+          4.092
+        ],
+        [
+          0.532,
+          4.146
+        ],
+        [
+          0.534,
+          0.0
+        ]
+      ]
+    },
+    "config": {
+      "launch_angle": 0.0,
+      "pad_altitude": 0.0,
+      "wind": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "time_step": 0.001,
+      "telemetry_interval": 0.01
+    },
+    "recovery": {
+      "main_altitude_m": 50.0,
+      "main_cd_a": 0.5,
+      "drogue_cd_a": 0.05
+    },
+    "models": "builtin6_dof_rk4_isa_v1",
+    "maximum_duration_s": 300.0
+  }
+}

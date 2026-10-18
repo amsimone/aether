@@ -112,7 +112,13 @@ impl RenderResources {
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -139,7 +145,13 @@ impl RenderResources {
                 topology: wgpu::PrimitiveTopology::LineList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -257,10 +269,15 @@ impl egui_wgpu::CallbackTrait for RenderCallback {
 pub struct RocketViewport {
     /// Orbit camera.
     pub camera: OrbitCamera,
-    /// Whether GPU resources have been initialized for the current mesh.
-    initialized: bool,
-    /// Hash of the last mesh, for dirty-flag detection.
-    mesh_hash: u64,
+    /// Last uploaded design, including every geometry parameter.
+    last_rocket: Option<rocket_core::Rocket>,
+    mesh: Mesh,
+    selected: Option<rocket_core::ComponentId>,
+    /// Show only the selected component, including internal parts.
+    pub isolate_selected: bool,
+    last_isolate: bool,
+    /// Request camera framing on the next draw.
+    pub fit_requested: bool,
     /// Stored render state (device + queue + format), captured on first init.
     render_state: Option<eframe::egui_wgpu::RenderState>,
 }
@@ -269,8 +286,12 @@ impl Default for RocketViewport {
     fn default() -> Self {
         Self {
             camera: OrbitCamera::default(),
-            initialized: false,
-            mesh_hash: 0,
+            last_rocket: None,
+            mesh: Mesh::new(),
+            selected: None,
+            isolate_selected: false,
+            last_isolate: false,
+            fit_requested: true,
             render_state: None,
         }
     }
@@ -297,8 +318,7 @@ impl RocketViewport {
     /// Call this every frame after the initial `update_mesh` to keep
     /// the 3D view in sync with design edits.
     pub fn rebuild_if_changed(&mut self, rocket: &rocket_core::Rocket) -> bool {
-        let new_hash = hash_rocket(rocket);
-        if new_hash == self.mesh_hash && self.initialized {
+        if self.last_rocket.as_ref() == Some(rocket) && self.last_isolate == self.isolate_selected {
             return false;
         }
 
@@ -306,7 +326,25 @@ impl RocketViewport {
             return false;
         };
 
-        let mesh = build_mesh(rocket);
+        self.mesh = build_mesh(rocket);
+        let mut mesh = self.mesh.clone();
+        for (id, range) in &self.mesh.parts {
+            if Some(*id) == self.selected {
+                for index in &self.mesh.indices[range.clone()] {
+                    mesh.vertices[*index as usize].color = [0.25, 0.82, 0.98];
+                }
+            }
+        }
+        if self.isolate_selected {
+            if let Some((_, range)) = self
+                .mesh
+                .parts
+                .iter()
+                .find(|(id, _)| Some(*id) == self.selected)
+            {
+                mesh.indices = self.mesh.indices[range.clone()].to_vec();
+            }
+        }
         let resources =
             RenderResources::new(&render_state.device, render_state.target_format, &mesh);
 
@@ -315,28 +353,46 @@ impl RocketViewport {
             .write()
             .callback_resources
             .insert(resources);
-        self.initialized = true;
-        self.mesh_hash = new_hash;
+        self.last_rocket = Some(rocket.clone());
+        self.last_isolate = self.isolate_selected;
         true
     }
 
     /// Force a mesh rebuild on the next `rebuild_if_changed` call.
     pub fn mark_dirty(&mut self) {
-        self.mesh_hash = 0;
+        self.last_rocket = None;
     }
 
     /// Draw the 3D viewport into the given egui Ui.
     ///
     /// Handles camera input and renders the rocket + grid.
-    pub fn show(&mut self, ui: &mut egui::Ui, rocket: &rocket_core::Rocket) {
-        let (rect, response) =
-            ui.allocate_exact_size(egui::Vec2::new(500.0, 400.0), egui::Sense::drag());
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        rocket: &rocket_core::Rocket,
+        selected: &mut Option<rocket_core::ComponentId>,
+    ) {
+        if self.selected != *selected {
+            self.selected = *selected;
+            self.fit_requested |= self.isolate_selected;
+            self.mark_dirty();
+        }
+        self.rebuild_if_changed(rocket);
+        let (rect, response) = ui.allocate_exact_size(
+            ui.available_size().max(egui::vec2(1.0, 1.0)),
+            egui::Sense::click_and_drag(),
+        );
 
         let aspect = if rect.height() > 0.0 {
             rect.width() / rect.height()
         } else {
             1.0
         };
+
+        if self.fit_requested || response.double_clicked() {
+            self.fit(aspect);
+            self.fit_requested = false;
+        }
 
         // Handle camera input.
         if self.camera.handle_input(&response, aspect) {
@@ -345,7 +401,7 @@ impl RocketViewport {
 
         // Build uniforms.
         let view = self.camera.view_matrix();
-        let proj = perspective(aspect, std::f32::consts::FRAC_PI_4, 0.01, 100.0);
+        let proj = perspective(aspect, std::f32::consts::FRAC_PI_4, 0.001, 10000.0);
         // Scale: rocket is in meters; we want to see ~0.5m objects.
         // The model matrix scales the world so the rocket fills the view.
         let scale = 1.0; // 1:1 for now; camera distance handles framing.
@@ -360,7 +416,7 @@ impl RocketViewport {
             _pad: 0.0,
         };
 
-        if self.initialized {
+        if self.last_rocket.is_some() {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
                 RenderCallback { uniforms },
@@ -375,24 +431,101 @@ impl RocketViewport {
             );
         }
 
-        // Show camera info on hover.
-        let _ = rocket; // (Used in update_mesh, not here.)
+        if response.clicked() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                if let Some(id) = self.pick(pointer, rect, view, proj) {
+                    *selected = Some(id);
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
     }
 }
 
-/// Hash a rocket's geometry for dirty-flag detection.
-fn hash_rocket(rocket: &rocket_core::Rocket) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    // Hash the component count and positions (good enough for dirty detection;
-    // a full hash would serialize, which is too slow for per-frame checks).
-    rocket.root.components.len().hash(&mut hasher);
-    for c in rocket.root.iter() {
-        c.id().as_u64().hash(&mut hasher);
-        c.position().as_meters().to_bits().hash(&mut hasher);
-        c.length().as_meters().to_bits().hash(&mut hasher);
+impl RocketViewport {
+    fn fit(&mut self, aspect: f32) {
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for (id, range) in &self.mesh.parts {
+            if self.isolate_selected && self.selected.is_some() && self.selected != Some(*id) {
+                continue;
+            }
+            for index in &self.mesh.indices[range.clone()] {
+                let p = self.mesh.vertices[*index as usize].position;
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(p[axis]);
+                    hi[axis] = hi[axis].max(p[axis]);
+                }
+            }
+        }
+        if !lo[0].is_finite() {
+            self.camera = OrbitCamera::default();
+            return;
+        }
+        for axis in 0..3 {
+            self.camera.target[axis] = lo[axis].midpoint(hi[axis]);
+        }
+        let radius = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2))
+            .sqrt()
+            * 0.5;
+        let half_fov = (std::f32::consts::FRAC_PI_8.tan() * aspect.min(1.0)).atan();
+        self.camera.distance = (radius * 1.25 / half_fov.sin()).max(0.04);
     }
-    hasher.finish()
+
+    fn pick(
+        &self,
+        pointer: egui::Pos2,
+        rect: egui::Rect,
+        view: [[f32; 4]; 4],
+        proj: [[f32; 4]; 4],
+    ) -> Option<rocket_core::ComponentId> {
+        let mut hit = None;
+        let mut nearest = f32::INFINITY;
+        for (id, range) in &self.mesh.parts {
+            if self.isolate_selected && self.selected.is_some() && Some(*id) != self.selected {
+                continue;
+            }
+            for triangle in self.mesh.indices[range.clone()].as_chunks::<3>().0 {
+                let projected: Vec<_> = triangle
+                    .iter()
+                    .map(|index| {
+                        let p = self.mesh.vertices[*index as usize].position;
+                        let clip = transform(proj, transform(view, [p[0], p[1], p[2], 1.0]));
+                        [
+                            rect.center().x + clip[0] / clip[3] * rect.width() * 0.5,
+                            rect.center().y - clip[1] / clip[3] * rect.height() * 0.5,
+                            clip[2] / clip[3],
+                        ]
+                    })
+                    .collect();
+                let (a, b, c) = (projected[0], projected[1], projected[2]);
+                let denominator = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+                if denominator.abs() < 1e-6 {
+                    continue;
+                }
+                let u = ((b[1] - c[1]) * (pointer.x - c[0]) + (c[0] - b[0]) * (pointer.y - c[1]))
+                    / denominator;
+                let v = ((c[1] - a[1]) * (pointer.x - c[0]) + (a[0] - c[0]) * (pointer.y - c[1]))
+                    / denominator;
+                let w = 1.0 - u - v;
+                let depth = u * a[2] + v * b[2] + w * c[2];
+                if u >= 0.0
+                    && v >= 0.0
+                    && w >= 0.0
+                    && (0.0..=1.0).contains(&depth)
+                    && depth < nearest
+                {
+                    hit = Some(*id);
+                    nearest = depth;
+                }
+            }
+        }
+        hit
+    }
+}
+
+fn transform(matrix: [[f32; 4]; 4], point: [f32; 4]) -> [f32; 4] {
+    std::array::from_fn(|row| (0..4).map(|col| matrix[col][row] * point[col]).sum())
 }
 
 // ---- Matrix helpers ----
@@ -422,23 +555,23 @@ fn perspective(aspect: f32, fov_y: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
     [
         [f / aspect, 0.0, 0.0, 0.0],
         [0.0, f, 0.0, 0.0],
-        [0.0, 0.0, far / (far - near), 1.0],
-        [0.0, 0.0, -(far * near) / (far - near), 0.0],
+        [0.0, 0.0, far / (near - far), -1.0],
+        [0.0, 0.0, (far * near) / (near - far), 0.0],
     ]
 }
 
 /// Build a grid floor and axis gizmo as a line mesh.
 fn build_grid_and_axes() -> Mesh {
     let mut mesh = Mesh::new();
-    let grid_color = [0.3, 0.3, 0.3];
+    let grid_color = [0.10, 0.14, 0.19];
     let axis_x_color = [0.8, 0.2, 0.2]; // red = X (body axis)
     let axis_y_color = [0.2, 0.8, 0.2]; // green = Y
     let axis_z_color = [0.2, 0.2, 0.8]; // blue = Z
 
     // Grid: lines at y = -0.05 (just below the rocket).
     let grid_y = -0.05_f32;
-    let grid_size = 1.0_f32;
-    let grid_step = 0.1_f32;
+    let grid_size = 0.4_f32;
+    let grid_step = 0.025_f32;
     let mut i = -grid_size;
     while i <= grid_size {
         let v1 = Vertex {
@@ -469,8 +602,8 @@ fn build_grid_and_axes() -> Mesh {
     }
 
     // Axes (slightly above the grid).
-    let axis_y = 0.001_f32;
-    let axis_len = 0.5_f32;
+    let axis_y = grid_y;
+    let axis_len = 0.03_f32;
     // X axis (red)
     mesh.vertices.push(Vertex {
         position: [0.0, axis_y, 0.0],
@@ -506,4 +639,60 @@ fn build_grid_and_axes() -> Mesh {
     });
 
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocket_core::{BodyTube, Component, ComponentId, Length, Rocket};
+
+    fn body_viewport() -> RocketViewport {
+        let mut rocket = Rocket::new("Viewport regression");
+        rocket.root.push(Component::BodyTube(BodyTube {
+            id: ComponentId::new(7),
+            position: Length::millimeters(70.0),
+            material: ComponentId::new(5),
+            length: Length::millimeters(180.0),
+            outer_diameter: Length::millimeters(25.0),
+            inner_diameter: Length::millimeters(24.0),
+        }));
+        RocketViewport {
+            mesh: build_mesh(&rocket),
+            ..RocketViewport::default()
+        }
+    }
+
+    #[test]
+    fn fitted_model_is_inside_clip_volume_at_wide_and_narrow_aspects() {
+        for aspect in [0.5, 1.0, 2.0] {
+            let mut viewport = body_viewport();
+            viewport.fit(aspect);
+            let view = viewport.camera.view_matrix();
+            let proj = perspective(aspect, std::f32::consts::FRAC_PI_4, 0.001, 10000.0);
+            let target = viewport.camera.target;
+            let center = transform(view, [target[0], target[1], target[2], 1.0]);
+            assert!(center[0].abs() < 1e-5 && center[1].abs() < 1e-5);
+            for vertex in &viewport.mesh.vertices {
+                let p = vertex.position;
+                let clip = transform(proj, transform(view, [p[0], p[1], p[2], 1.0]));
+                assert!(clip[3] > 0.0, "geometry must be in front of the camera");
+                assert!(clip[0].abs() < clip[3] && clip[1].abs() < clip[3]);
+                assert!((0.0..=1.0).contains(&(clip[2] / clip[3])));
+            }
+        }
+    }
+
+    #[test]
+    fn clicking_visible_body_selects_it_and_background_misses() {
+        let mut viewport = body_viewport();
+        viewport.fit(1.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0));
+        let view = viewport.camera.view_matrix();
+        let proj = perspective(1.0, std::f32::consts::FRAC_PI_4, 0.001, 10000.0);
+        assert_eq!(
+            viewport.pick(rect.center(), rect, view, proj),
+            Some(ComponentId::new(7))
+        );
+        assert_eq!(viewport.pick(rect.min, rect, view, proj), None);
+    }
 }

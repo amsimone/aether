@@ -14,29 +14,31 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
     ui.heading("Components");
     ui.add_space(4.0);
 
-    // Toolbar: add buttons.
-    ui.horizontal_wrapped(|ui| {
-        let add_button = |ui: &mut egui::Ui, label: &str| -> bool {
-            ui.add(egui::Button::new(label).small()).clicked()
-        };
-        if add_button(ui, "+ Nose") {
-            app.add_nose_cone();
-        }
-        if add_button(ui, "+ Body") {
-            app.add_body_tube();
-        }
-        if add_button(ui, "+ Fins") {
-            app.add_fin_set();
-        }
-        if add_button(ui, "+ Lug") {
-            app.add_launch_lug();
-        }
-        if add_button(ui, "+ Mass") {
-            app.add_mass_object();
+    ui.label(
+        egui::RichText::new("Select a part to edit its dimensions.")
+            .small()
+            .weak(),
+    );
+    ui.add_space(6.0);
+    ui.menu_button("+ Add component", |ui| {
+        for (name, add) in [
+            ("Nose cone", AetherApp::add_nose_cone as fn(&mut AetherApp)),
+            ("Body tube", AetherApp::add_body_tube),
+            ("Transition", AetherApp::add_transition),
+            ("Coupler", AetherApp::add_coupler),
+            ("Pod", AetherApp::add_pod),
+            ("Fin set", AetherApp::add_fin_set),
+            ("Launch lug", AetherApp::add_launch_lug),
+            ("Mass object", AetherApp::add_mass_object),
+        ] {
+            if ui.button(name).clicked() {
+                add(app);
+                app.viewport.fit_requested = true;
+                ui.close();
+            }
         }
     });
-
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 
     // Selected-component actions.
     if app.selected.is_some() {
@@ -55,7 +57,7 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
     }
 
     // Component list.
-    let component_count = app.rocket.root.components.len();
+    let component_count = app.document.rocket().root.components.len();
     if component_count == 0 {
         ui.label(
             egui::RichText::new("(no components — use the buttons above to add)")
@@ -66,7 +68,8 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
 
     // Collect component summaries (to avoid borrow issues).
     let summaries: Vec<(rocket_core::ComponentId, String, String)> = app
-        .rocket
+        .document
+        .rocket()
         .root
         .iter()
         .map(|c| {
@@ -80,7 +83,7 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
     for (id, kind, detail) in &summaries {
         let selected = app.selected == Some(*id);
         let response = ui
-            .selectable_label(selected, egui::RichText::new(format!("{kind} — {detail}")))
+            .selectable_label(selected, egui::RichText::new(format!("{kind}\n{detail}")))
             .on_hover_text(format!(
                 "Click to select · Right-click for actions\nID: {id}"
             ));
@@ -109,7 +112,7 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
     }
 }
 
-fn component_kind_label(c: &Component) -> &'static str {
+pub fn component_kind_label(c: &Component) -> &'static str {
     match c {
         Component::NoseCone(_) => "Nose Cone",
         Component::BodyTube(_) => "Body Tube",

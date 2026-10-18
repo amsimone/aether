@@ -30,9 +30,9 @@ pub struct OrbitCamera {
 impl Default for OrbitCamera {
     fn default() -> Self {
         Self {
-            distance: 1.5,
-            azimuth: -std::f32::consts::FRAC_PI_4,
-            elevation: std::f32::consts::FRAC_PI_6,
+            distance: 0.65,
+            azimuth: std::f32::consts::FRAC_PI_2,
+            elevation: 0.22,
             target: [0.15, 0.0, 0.0], // Slightly aft of the nose tip.
         }
     }
@@ -47,8 +47,8 @@ impl OrbitCamera {
         let ca = self.azimuth.cos();
         let sa = self.azimuth.sin();
         [
-            self.target[0] + self.distance * se,
-            self.target[1] + self.distance * ce * ca,
+            self.target[0] + self.distance * ce * ca,
+            self.target[1] + self.distance * se,
             self.target[2] + self.distance * ce * sa,
         ]
     }
@@ -88,10 +88,14 @@ impl OrbitCamera {
         }
 
         // Zoom (scroll).
-        let scroll = response.ctx.input(|i| i.smooth_scroll_delta).y;
+        let scroll = if response.hovered() {
+            response.ctx.input(|i| i.smooth_scroll_delta).y
+        } else {
+            0.0
+        };
         if scroll.abs() > 0.0 {
-            self.distance *= 1.0 - scroll as f32 * 0.001;
-            self.distance = self.distance.max(0.1);
+            self.distance *= (-scroll * 0.002).exp();
+            self.distance = self.distance.clamp(0.02, 1000.0);
             changed = true;
         }
 
@@ -108,7 +112,7 @@ fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
 
     // Column-major 4x4.
     [
-        [s[0], u[1], -f[0], 0.0],
+        [s[0], u[0], -f[0], 0.0],
         [s[1], u[1], -f[1], 0.0],
         [s[2], u[2], -f[2], 0.0],
         [-dot(s, eye), -dot(u, eye), dot(f, eye), 1.0],

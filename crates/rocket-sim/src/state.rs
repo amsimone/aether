@@ -20,7 +20,8 @@ pub const DEFAULT_TIME_STEP: f64 = 0.001;
 const G: f64 = 9.80665;
 
 /// Configuration for a flight simulation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SimConfig {
     /// Launch angle from vertical, in radians.
     ///

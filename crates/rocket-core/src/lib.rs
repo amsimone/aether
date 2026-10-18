@@ -17,6 +17,7 @@ pub mod materials;
 pub mod rocket;
 pub mod stage;
 pub mod units;
+pub mod validation;
 
 pub use components::{
     Airfoil, BodyTube, Component, Coupler, FinPlanform, FinSet, LaunchLug, MassObject,

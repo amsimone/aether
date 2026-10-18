@@ -3526,8 +3526,11 @@ name = "rocket-io"
 version = "0.1.0"
 dependencies = [
  "rocket-core",
+ "rocket-motors",
+ "rocket-sim",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3586,6 +3589,7 @@ dependencies = [
  "rocket-core",
  "rocket-motors",
  "rocket-physics",
+ "serde",
 ]
 
 [[package]]
