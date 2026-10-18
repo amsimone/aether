@@ -46,6 +46,9 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace
 
+      - name: CFD adapter contracts (no external solver needed)
+        run: python3 -m unittest discover -s crates/rocket-cfd/tests -v
+
       - name: Doc
         run: cargo doc --workspace --no-deps
 

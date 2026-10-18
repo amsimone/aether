@@ -34,16 +34,29 @@ support **Edit → Undo/Redo** and Cmd/Ctrl+Z. Invalid dimensions and references
 are rejected. New/Open/reference/close actions offer Save, Discard, or Cancel
 when the vehicle or case has changed.
 
-Saves write a schema-2 project containing the vehicle and one named flight case,
+The toolbar **Save** button writes a schema-3 project containing the vehicle,
+one named flight case, and retained run records,
 including its resolved motor curve, launch/wind/recovery settings, model set,
-and numerics. Files replace atomically. Legacy schema-1 designs still open;
+and numerics. Files replace atomically. Schema-2 projects migrate with an empty
+run list. Legacy schema-1 designs still open;
 select a motor for their imported default case. The portable
 [`examples/aether-one-project.rocket`](examples/aether-one-project.rocket)
 includes the reference vehicle and a complete offline case.
 
-Choose **Simulate** for the bundled A8-3, B6, and C6 sample motor curves. These
+Choose **Flight case** for the bundled A8-3, B6, and C6 sample motor curves. These
 work offline and are embedded in the app. See the [UI review](docs/ui-review.md)
 for the changes and remaining UX work.
+
+**Run case → Results** runs in the background with cancellation. Results retain
+their exact inputs, source/solver versions, termination status, events, and full
+telemetry. Compare two runs, select plot channels, zoom/pan/inspect samples, and
+export CSV or a portable run JSON. Saving and reopening preserves the runs.
+
+**Aerodynamics** imports explicit coefficient datasets for inspection, comparison,
+and deliberate selection in the flight case. Its CFD panel exports or runs a
+local Gmsh/OpenFOAM study with retained geometry, mesh, solver files, and logs.
+The first backend is exploratory steady subsonic RANS; convergence is not an
+accuracy certificate. See [setup, contracts, and limits](docs/development-status.md#analysis-and-cfd-increment).
 
 See the planning documents for the full architecture and roadmap:
 
@@ -63,6 +76,10 @@ The CLI binary:
 ```sh
 cargo run -p rocket-cli -- --version
 cargo run -p rocket-cli -- status
+cargo run -p rocket-cli -- simulate examples/aether-one-project.rocket --output /tmp/run.json --csv /tmp/telemetry.csv
+cargo run -p rocket-cli -- cfd-prepare examples/aether-one-project.rocket /tmp/aether-cfd-study
+# After installing the external tools and selecting their paths:
+cargo run -p rocket-cli -- cfd-run /tmp/aether-cfd-study --python /path/to/venv/bin/python --foam-bashrc /path/to/OpenFOAM/etc/bashrc
 ```
 
 ## License

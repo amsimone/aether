@@ -55,6 +55,9 @@ impl RecoveryConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimulationCase {
+    /// Actual aerodynamic provider, embedded with the case.
+    #[serde(default)]
+    pub aerodynamics: rocket_aero::AeroModel,
     /// Name displayed in the analysis panel.
     pub name: String,
     /// Resolved motor curve and mass data; no catalog-index dependency.
@@ -71,6 +74,7 @@ pub struct SimulationCase {
 impl Default for SimulationCase {
     fn default() -> Self {
         Self {
+            aerodynamics: rocket_aero::AeroModel::default(),
             name: "Nominal".into(),
             motor: None,
             config: SimConfig::default(),
@@ -86,6 +90,7 @@ impl SimulationCase {
     /// # Errors
     /// Rejects non-finite or out-of-scope settings and malformed motor data.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        self.aerodynamics.validate()?;
         let config = &self.config;
         let valid = !self.name.trim().is_empty()
             && config.launch_angle.is_finite()
@@ -123,8 +128,20 @@ impl SimulationCase {
     /// # Errors
     /// Rejects invalid inputs, absent motors, and vehicles with no dry mass.
     pub fn run(&self, rocket: &Rocket) -> Result<SimResult, ValidationError> {
+        self.run_controlled(rocket, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// Execute with cooperative cancellation checked at every integrator step.
+    /// # Errors
+    /// Rejects invalid inputs or a stale aerodynamic dataset before starting.
+    pub fn run_controlled(
+        &self,
+        rocket: &Rocket,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<SimResult, ValidationError> {
         self.validate()?;
         validate_rocket(rocket)?;
+        self.aerodynamics.validate_vehicle(rocket)?;
         if rocket.root.upper_stage.is_some() {
             return Err(ValidationError("This model set supports a single rigid stage; upper-stage dynamics are not implemented".into()));
         }
@@ -147,8 +164,9 @@ impl SimulationCase {
             ModelSet::Builtin6DofRk4IsaV1 => {
                 Ok(
                     Simulator6Dof::new(rocket.clone(), motor.clone(), self.config.clone())
+                        .with_aerodynamics(self.aerodynamics.clone())
                         .with_recovery(self.recovery.initial_state())
-                        .run_for(Duration::seconds(self.maximum_duration_s)),
+                        .run_controlled(Duration::seconds(self.maximum_duration_s), cancelled),
                 )
             }
         }
@@ -232,5 +250,140 @@ mod tests {
         assert!(!second.main_deployed && !second.drogue_deployed);
         assert!(first.main_deployed);
         assert_eq!(second.main_cd_a, config.main_cd_a);
+    }
+}
+
+#[cfg(test)]
+mod analysis_tests {
+    use super::*;
+    fn inputs() -> (Rocket, SimulationCase) {
+        let rocket: Rocket = fixture_rocket();
+        let case = SimulationCase {
+            motor: Some(
+                rocket_motors::rasp::parse(include_str!(
+                    "../../../tests/fixtures/motors/estes_a8_3.eng"
+                ))
+                .expect("motor"),
+            ),
+            ..SimulationCase::default()
+        };
+        (rocket, case)
+    }
+    fn fixture_rocket() -> Rocket {
+        // Use core constructors, keeping this crate free of an I/O dependency.
+        use rocket_core::{Component, ComponentId, Length, Mass, MassObject, MassObjectKind};
+        let mut rocket = Rocket::new("Telemetry fixture");
+        rocket.root.push(Component::MassObject(MassObject {
+            id: ComponentId::new(1),
+            position: Length::ZERO,
+            mass: Mass::grams(15.0),
+            kind: MassObjectKind::Other,
+        }));
+        rocket
+    }
+    #[test]
+    fn cancellation_and_duration_limits_are_distinct_and_retained_records_validate() {
+        let (rocket, mut case) = inputs();
+        case.maximum_duration_s = 0.25;
+        let result = case.run(&rocket).expect("valid run");
+        assert_eq!(result.termination, crate::Termination::DurationLimit);
+        assert!((result.landing_time.as_seconds() - 0.25).abs() < 1e-12);
+        let record = crate::RunRecord::capture(rocket.clone(), case.clone(), result, 5);
+        record.validate().expect("valid record");
+        let result = case
+            .run_controlled(&rocket, &std::sync::atomic::AtomicBool::new(true))
+            .expect("cancelled propagation");
+        assert_eq!(result.termination, crate::Termination::Cancelled);
+        crate::RunRecord::capture(rocket, case, result, 5)
+            .validate()
+            .expect("cancelled record");
+    }
+    #[test]
+    fn six_dof_telemetry_satisfies_physical_sampling_identities() {
+        let (rocket, mut case) = inputs();
+        case.maximum_duration_s = 0.1;
+        case.config.pad_altitude = rocket_core::Length::meters(1500.0);
+        case.config.wind = (3.0, 0.0, 0.0);
+        let result = case.run(&rocket).expect("run");
+        for p in &result.telemetry {
+            let f = p.flight.expect("6DOF channels");
+            let speed =
+                ((p.velocity.0 - 3.0).powi(2) + p.velocity.1.powi(2) + p.velocity.2.powi(2)).sqrt();
+            assert!((f.airspeed_m_s - speed).abs() < 1e-9);
+            assert!((f.dynamic_pressure_pa - 0.5 * f.density_kg_m3 * speed * speed).abs() < 1e-9);
+            let sound = rocket_physics::IsaAtmosphere::new()
+                .at(rocket_core::Length::meters(p.position.2))
+                .speed_of_sound
+                .as_meters_per_second();
+            assert!((f.mach - speed / sound).abs() < 1e-12);
+            assert!((f.quaternion_wxyz.iter().map(|v| v * v).sum::<f64>() - 1.0).abs() < 1e-9);
+            assert!(
+                (f.acceleration_m_s2
+                    .iter()
+                    .map(|v| v * v)
+                    .sum::<f64>()
+                    .sqrt()
+                    - p.acceleration)
+                    .abs()
+                    < 1e-9
+            );
+        }
+    }
+    #[test]
+    fn flight_domain_limits_stop_at_rk_substages_and_fallback_is_recorded() {
+        use rocket_aero::{
+            AeroDataset, AeroModel, AeroSource, CoefficientRow, DatasetMetadata, DomainPolicy,
+        };
+        use std::sync::Arc;
+        let (rocket, mut case) = inputs();
+        case.maximum_duration_s = 0.25;
+        let data = Arc::new(AeroDataset {
+            version: 1,
+            metadata: DatasetMetadata {
+                name: "Synthetic domain fixture".into(),
+                source: "Unit test".into(),
+                evidence: "Synthetic coefficients for domain handling only".into(),
+                vehicle_sha256: rocket_aero::vehicle_fingerprint(&rocket),
+                axes: "body_x_nose_y_right_z_rh".into(),
+                reference_area_m2: 0.001,
+                reference_length_m: 0.1,
+                moment_reference_station_m: 0.0,
+                reynolds_min: 0.0,
+                reynolds_max: 1e9,
+            },
+            rows: vec![CoefficientRow {
+                mach: 0.2,
+                alpha_rad: 0.0,
+                beta_rad: 0.0,
+                ca: 0.5,
+                cy: 0.0,
+                cn: 0.0,
+                cl: 0.0,
+                cm: 0.0,
+                cn_yaw: 0.0,
+            }],
+        });
+        case.aerodynamics = AeroModel::Dataset {
+            data: data.clone(),
+            outside_domain: DomainPolicy::Stop,
+        };
+        let stopped = case.run(&rocket).expect("valid inputs, model-domain stop");
+        assert!(matches!(
+            stopped.termination,
+            crate::Termination::ModelDomainLimit(_)
+        ));
+        assert!(stopped.landing_time.as_seconds() < case.maximum_duration_s);
+        crate::RunRecord::capture(rocket.clone(), case.clone(), stopped, 0)
+            .validate()
+            .expect("retained partial run");
+        case.aerodynamics = AeroModel::Dataset {
+            data,
+            outside_domain: DomainPolicy::BuiltinFallback,
+        };
+        let fallback = case.run(&rocket).expect("explicit fallback");
+        assert_eq!(fallback.termination, crate::Termination::DurationLimit);
+        assert!(fallback.telemetry.iter().any(|p| p
+            .flight
+            .is_some_and(|f| f.aero_source == AeroSource::BuiltinOutsideDataset)));
     }
 }

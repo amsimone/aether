@@ -27,3 +27,7 @@ dist/
 /data/motors/*.eng
 /data/motors/*.rse
 /data/motors/*.meta.json
+
+# Python CFD driver test artifacts
+__pycache__/
+*.pyc

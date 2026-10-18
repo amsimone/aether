@@ -1,16 +1,17 @@
-//! Version 2 project envelope; version 1 designs import without inventing a motor.
+//! Version 3 project envelope with retained run records; version 1 designs import without inventing a motor.
 
 use super::{load_from_json, write_atomic, DesignFileError, DESIGN_SCHEMA_VERSION};
 use rocket_core::{
     validation::{validate_rocket, ValidationError},
     Rocket,
 };
-use rocket_sim::SimulationCase;
+use rocket_sim::{RunRecord, SimulationCase};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::{io::Write, path::Path};
 
 /// Project envelope schema, distinct from the nested vehicle schema.
-pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const PROJECT_SCHEMA_VERSION: u32 = 3;
 
 /// A vehicle and one complete named flight-case configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -22,6 +23,8 @@ pub struct Project {
     pub rocket: Rocket,
     /// The analysis case; motor may be unresolved in an editing document.
     pub case: SimulationCase,
+    #[serde(default)]
+    pub runs: Vec<Arc<RunRecord>>,
 }
 impl Project {
     /// Import a vehicle with a named default case and an explicitly unresolved motor.
@@ -31,6 +34,7 @@ impl Project {
             version: PROJECT_SCHEMA_VERSION,
             rocket,
             case: SimulationCase::default(),
+            runs: Vec::new(),
         }
     }
 
@@ -47,6 +51,13 @@ impl Project {
         }
         validate_rocket(&self.rocket)?;
         self.case.validate()?;
+        let mut ids = std::collections::HashSet::new();
+        for run in &self.runs {
+            run.validate()?;
+            if !ids.insert(&run.id) {
+                return Err(ValidationError("Duplicate retained-run ID".into()).into());
+            }
+        }
         Ok(())
     }
 
@@ -72,6 +83,11 @@ pub fn load_project_from_json(json: &str) -> Result<Project, DesignFileError> {
     let header: Header = serde_json::from_str(json)?;
     let project = match header.version {
         DESIGN_SCHEMA_VERSION => Project::from_rocket(load_from_json(json)?),
+        2 => {
+            let mut legacy: Project = serde_json::from_str(json)?;
+            legacy.version = PROJECT_SCHEMA_VERSION;
+            legacy
+        }
         PROJECT_SCHEMA_VERSION => serde_json::from_str(json)?,
         other => return Err(DesignFileError::UnsupportedVersion(other)),
     };
@@ -192,8 +208,8 @@ mod tests {
     #[test]
     fn unsupported_schemas_models_and_invalid_references_are_rejected() {
         assert!(matches!(
-            load_project_from_json("{\"version\":3}"),
-            Err(DesignFileError::UnsupportedVersion(3))
+            load_project_from_json("{\"version\":99}"),
+            Err(DesignFileError::UnsupportedVersion(99))
         ));
         let original = project();
         let mut json = serde_json::to_value(&original).expect("JSON");

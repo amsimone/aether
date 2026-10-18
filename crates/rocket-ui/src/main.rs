@@ -6,11 +6,13 @@
 //!
 //! Run with: `cargo run -p rocket-ui`
 
+mod aerodynamics;
 mod app;
 mod editing;
 mod plots;
 mod properties;
 mod reference;
+mod results;
 mod simulate;
 mod stability_gauge;
 mod tree;

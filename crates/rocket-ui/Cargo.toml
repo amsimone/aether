@@ -12,6 +12,7 @@ name = "aether-ui"
 path = "src/main.rs"
 
 [dependencies]
+rocket-cfd = { path = "../rocket-cfd", version = "0.1.0" }
 eframe = "0.37"
 egui = { version = "0.37", features = ["serde"] }
 rfd = "0.15"

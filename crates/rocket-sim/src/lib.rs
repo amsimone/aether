@@ -23,6 +23,8 @@
 #![warn(clippy::pedantic)]
 
 mod case;
+mod run;
+pub use run::RunRecord;
 mod dopri5;
 mod integrator;
 mod result;
@@ -31,7 +33,7 @@ mod state6dof;
 pub use case::{ModelSet, RecoveryConfig, SimulationCase};
 
 pub use dopri5::{step as dopri5_step, Dopri5Config, Dopri5Step};
-pub use result::{SimResult, TelemetryPoint};
+pub use result::{FlightEvent, FlightSample, SimResult, TelemetryPoint, Termination};
 pub use state::{SimConfig, SimState, Simulator, DEFAULT_TIME_STEP};
 pub use state6dof::{RecoveryState, SimState6Dof, Simulator6Dof};
 

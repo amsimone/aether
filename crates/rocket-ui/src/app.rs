@@ -45,6 +45,8 @@ use crate::tree::show_component_tree;
 pub enum RightPanelTab {
     Design,
     Simulate,
+    Results,
+    Aerodynamics,
 }
 
 /// The main Aether eframe app.
@@ -70,6 +72,8 @@ pub struct AetherApp {
     file_error: Option<String>,
     replacement: ReplacementGuard,
     allow_close: bool,
+    pub results: crate::results::ResultsState,
+    pub aero_panel: crate::aerodynamics::AeroPanelState,
 }
 
 /// Pending file dialog operation (processed in `logic`).
@@ -77,6 +81,11 @@ enum FileDialog {
     Open,
     Save,
     SaveAs,
+    ExportCsv(String),
+    ExportRun(String),
+    ImportRun,
+    ImportDataset,
+    PrepareCfd(bool),
 }
 
 impl AetherApp {
@@ -124,6 +133,8 @@ impl AetherApp {
             file_error: None,
             replacement: ReplacementGuard::default(),
             allow_close: false,
+            results: crate::results::ResultsState::default(),
+            aero_panel: crate::aerodynamics::AeroPanelState::default(),
         };
 
         app.viewport.update_mesh(app.document.rocket(), cc);
@@ -213,7 +224,6 @@ impl AetherApp {
 
     /// Invalidate derived views after an accepted engineering input change.
     pub fn mark_dirty(&mut self) {
-        self.sim_panel.result = None;
         self.viewport.mark_dirty();
     }
 }
@@ -224,10 +234,13 @@ impl eframe::App for AetherApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_jobs(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         if close_requested
             && !self.allow_close
-            && (self.document.is_dirty() || self.replacement.pending().is_some())
+            && (self.document.is_dirty()
+                || self.replacement.pending().is_some()
+                || self.analysis_running())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request_action(DocumentAction::Quit, ctx);
@@ -257,12 +270,20 @@ impl eframe::App for AetherApp {
                 }
                 Shortcut::New => self.request_action(DocumentAction::New, ctx),
                 Shortcut::Open => self.request_action(DocumentAction::Open, ctx),
-                Shortcut::Delete => self.delete_selected(),
-                Shortcut::Duplicate => self.duplicate_selected(),
+                Shortcut::Delete if self.right_tab == RightPanelTab::Design => {
+                    self.delete_selected();
+                }
+                Shortcut::Duplicate if self.right_tab == RightPanelTab::Design => {
+                    self.duplicate_selected();
+                }
+                Shortcut::Delete | Shortcut::Duplicate => {}
             }
         }
         if self.file_dialog.is_some() {
             ctx.request_repaint();
+        }
+        if self.analysis_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
@@ -277,7 +298,11 @@ impl eframe::App for AetherApp {
                 self.show_status_bar(ui);
             });
 
-        egui::Panel::left("parts_panel").resizable(true).default_size(235.0)
+        if matches!(
+            self.right_tab,
+            RightPanelTab::Design | RightPanelTab::Simulate
+        ) {
+            egui::Panel::left("parts_panel").resizable(true).default_size(235.0)
             .size_range(210.0..=320.0)
             .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(16.0))
             .show(ui, |ui| {
@@ -294,25 +319,37 @@ impl eframe::App for AetherApp {
                 });
             });
 
-        egui::Panel::right("inspector_panel")
-            .resizable(true)
-            .default_size(310.0)
-            .size_range(280.0..=460.0)
-            .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(18.0))
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("inspector_scroll")
-                    .show(ui, |ui| match self.right_tab {
-                        RightPanelTab::Design => {
-                            ui.label(egui::RichText::new("COMPONENT INSPECTOR").small().weak());
-                            show_properties(self, ui);
-                            ui.add_space(16.0);
-                            ui.separator();
-                            show_stability_gauge(self, ui);
-                        }
-                        RightPanelTab::Simulate => crate::simulate::show_simulate_panel(self, ui),
-                    });
-            });
+            egui::Panel::right("inspector_panel")
+                .resizable(true)
+                .default_size(310.0)
+                .size_range(280.0..=460.0)
+                .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(18.0))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("inspector_scroll")
+                        .show(ui, |ui| match self.right_tab {
+                            RightPanelTab::Design => {
+                                ui.label(egui::RichText::new("COMPONENT INSPECTOR").small().weak());
+                                show_properties(self, ui);
+                                ui.add_space(16.0);
+                                ui.separator();
+                                show_stability_gauge(self, ui);
+                            }
+                            RightPanelTab::Simulate => {
+                                crate::simulate::show_simulate_panel(self, ui);
+                            }
+                            _ => {}
+                        });
+                });
+        } else if self.right_tab == RightPanelTab::Results {
+            egui::Panel::left("runs_panel")
+                .default_size(230.0)
+                .size_range(190.0..=350.0)
+                .resizable(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| crate::results::sidebar(self, ui));
+                });
+        }
 
         egui::CentralPanel::default()
             .frame(
@@ -321,6 +358,14 @@ impl eframe::App for AetherApp {
                     .inner_margin(20.0),
             )
             .show(ui, |ui| {
+                if self.right_tab == RightPanelTab::Results {
+                    crate::results::show(self, ui);
+                    return;
+                }
+                if self.right_tab == RightPanelTab::Aerodynamics {
+                    crate::aerodynamics::show(self, ui);
+                    return;
+                }
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("ASSEMBLY").small().weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -393,6 +438,9 @@ impl eframe::App for AetherApp {
                     .show(ui, self.document.rocket(), &mut self.selected);
             });
 
+        if self.file_dialog.is_some() {
+            ui.ctx().request_repaint();
+        }
         self.show_unsaved_dialog(ui.ctx());
         if let Some(message) = self
             .file_error
@@ -518,8 +566,32 @@ impl AetherApp {
             });
 
             ui.separator();
+            if ui
+                .add(egui::Button::new("Save").fill(egui::Color32::from_rgb(29, 85, 110)))
+                .on_hover_text("Save project, case, and retained results · Cmd/Ctrl+S")
+                .clicked()
+            {
+                self.queue_save();
+            }
+            let filename = self
+                .file_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map_or("Untitled project".into(), |s| {
+                    s.to_string_lossy().into_owned()
+                });
+            ui.add(egui::Label::new(filename).truncate());
+        });
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
             ui.selectable_value(&mut self.right_tab, RightPanelTab::Design, "Design");
-            ui.selectable_value(&mut self.right_tab, RightPanelTab::Simulate, "Simulate");
+            ui.selectable_value(&mut self.right_tab, RightPanelTab::Simulate, "Flight case");
+            ui.selectable_value(&mut self.right_tab, RightPanelTab::Results, "Results");
+            ui.selectable_value(
+                &mut self.right_tab,
+                RightPanelTab::Aerodynamics,
+                "Aerodynamics",
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.document.is_dirty() {
                     ui.label(
@@ -545,12 +617,23 @@ impl AetherApp {
         self.file_path = None;
         self.file_error = None;
         self.sim_panel = SimPanelState::default();
+        self.results = crate::results::ResultsState::default();
+        self.aero_panel.settings = None;
+        self.aero_panel.preview = None;
+        self.aero_panel.completed = None;
+        self.aero_panel.artifact = None;
+        self.aero_panel.error = None;
         self.viewport.isolate_selected = false;
         self.viewport.fit_requested = true;
         self.viewport.mark_dirty();
     }
 
     fn request_action(&mut self, action: DocumentAction, ctx: &egui::Context) {
+        if self.analysis_running() {
+            self.file_error=Some("An analysis is still running. Wait for it to finish or cancel it before replacing or closing this project.".into());
+            ctx.request_repaint();
+            return;
+        }
         if let Some(ready) = self.replacement.request(action, self.document.is_dirty()) {
             self.execute_action(ready, ctx);
         }
@@ -582,7 +665,7 @@ impl AetherApp {
             .show(ctx, |ui| {
                 ui.set_max_width(430.0);
                 ui.heading("Save changes before continuing?");
-                ui.label("The vehicle and flight case have unsaved changes.");
+                ui.label("The project has unsaved vehicle, case, or result changes.");
                 if let Some(error) = &self.file_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -666,7 +749,74 @@ impl AetherApp {
     }
 
     fn handle_file_dialog(&mut self, dialog: FileDialog, ctx: &egui::Context) {
+        let exporting_csv = matches!(&dialog, FileDialog::ExportCsv(_));
         match dialog {
+            FileDialog::ExportCsv(id) | FileDialog::ExportRun(id) => {
+                let csv = exporting_csv;
+                let run = self
+                    .document
+                    .project()
+                    .runs
+                    .iter()
+                    .find(|r| r.id == id)
+                    .cloned();
+                if let Some(run) = run {
+                    let extension = if csv { "csv" } else { "json" };
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(format!("run-{}.{}", run.id, extension))
+                        .add_filter("Run output", &[extension])
+                        .save_file()
+                    {
+                        let result = if csv {
+                            rocket_io::save_telemetry_csv(&run, path)
+                        } else {
+                            rocket_io::save_run_to_path(&run, path)
+                        };
+                        if let Err(error) = result {
+                            self.file_error = Some(error.to_string());
+                        }
+                    }
+                }
+            }
+            FileDialog::ImportRun => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Run record", &["json"])
+                    .pick_file()
+                {
+                    match rocket_io::load_run_from_path(path) {
+                        Ok(run) => {
+                            let id = run.id.clone();
+                            match self.document.retain_run(run) {
+                                Ok(()) => {
+                                    self.results.selected = Some(id);
+                                    self.right_tab = RightPanelTab::Results;
+                                }
+                                Err(e) => self.file_error = Some(e.to_string()),
+                            }
+                        }
+                        Err(e) => self.file_error = Some(e.to_string()),
+                    }
+                }
+            }
+            FileDialog::ImportDataset => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Aerodynamic dataset", &["json"])
+                    .pick_file()
+                {
+                    match rocket_io::load_aero_dataset(path) {
+                        Ok(data) => self.aero_panel.set_preview(std::sync::Arc::new(data)),
+                        Err(e) => self.aero_panel.error = Some(e.to_string()),
+                    }
+                }
+            }
+            FileDialog::PrepareCfd(run) => {
+                if let Some(parent) = rfd::FileDialog::new()
+                    .set_title("Choose study output folder")
+                    .pick_folder()
+                {
+                    self.prepare_cfd_in(parent, run);
+                }
+            }
             FileDialog::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Aether project or design", &["rocket"])
@@ -712,6 +862,188 @@ impl AetherApp {
                     }
                 }
             }
+        }
+    }
+}
+
+impl AetherApp {
+    fn analysis_running(&self) -> bool {
+        self.sim_panel.job.is_some() || self.aero_panel.job.is_some()
+    }
+    pub fn queue_save(&mut self) {
+        self.file_dialog = Some(if self.file_path.is_some() {
+            FileDialog::Save
+        } else {
+            FileDialog::SaveAs
+        });
+    }
+    pub fn show_results(&mut self) {
+        self.right_tab = RightPanelTab::Results;
+    }
+    pub fn import_run(&mut self) {
+        self.file_dialog = Some(FileDialog::ImportRun);
+    }
+    pub fn import_dataset(&mut self) {
+        self.file_dialog = Some(FileDialog::ImportDataset);
+    }
+    pub fn export_csv(&mut self, id: String) {
+        self.file_dialog = Some(FileDialog::ExportCsv(id));
+    }
+    pub fn export_run(&mut self, id: String) {
+        self.file_dialog = Some(FileDialog::ExportRun(id));
+    }
+    pub fn prepare_cfd(&mut self, run: bool) {
+        self.file_dialog = Some(FileDialog::PrepareCfd(run));
+    }
+    pub fn cancel_run(&self) {
+        if let Some(job) = &self.sim_panel.job {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    pub fn cancel_cfd(&self) {
+        if let Some(job) = &self.aero_panel.job {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    pub fn start_run(&mut self) {
+        if self.sim_panel.job.is_some() {
+            return;
+        }
+        let rocket = self.document.rocket().clone();
+        let case = self.document.case().clone();
+        let revision = self.document.revision();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let token = cancel.clone();
+        match std::thread::Builder::new()
+            .name("aether-flight".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    case.run_controlled(&rocket, &token)
+                        .map(|result| {
+                            rocket_sim::RunRecord::capture(
+                                rocket.clone(),
+                                case.clone(),
+                                result,
+                                revision,
+                            )
+                        })
+                        .map_err(|e| e.to_string())
+                }))
+                .unwrap_or_else(|_| Err("Flight worker failed unexpectedly".into()));
+                let _ = sender.send(result);
+            }) {
+            Ok(_) => {
+                self.sim_panel.job = Some(crate::simulate::FlightJob { receiver, cancel });
+                self.sim_panel.error = None;
+                self.right_tab = RightPanelTab::Results;
+            }
+            Err(error) => self.sim_panel.error = Some(error.to_string()),
+        }
+    }
+    fn poll_jobs(&mut self, ctx: &egui::Context) {
+        fn take<T>(
+            receiver: &std::sync::mpsc::Receiver<Result<T, String>>,
+        ) -> Option<Result<T, String>> {
+            match receiver.try_recv() {
+                Ok(value) => Some(value),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("Analysis worker disconnected".into()))
+                }
+            }
+        }
+        if let Some(done) = self
+            .sim_panel
+            .job
+            .as_ref()
+            .and_then(|job| take(&job.receiver))
+        {
+            self.sim_panel.job = None;
+            match done {
+                Ok(run) => {
+                    let id = run.id.clone();
+                    match self.document.retain_run(run) {
+                        Ok(()) => {
+                            self.results.selected = Some(id);
+                            self.results.plot.reset();
+                        }
+                        Err(e) => self.sim_panel.error = Some(e.to_string()),
+                    }
+                }
+                Err(e) => self.sim_panel.error = Some(e),
+            }
+        }
+        if let Some(done) = self
+            .aero_panel
+            .job
+            .as_ref()
+            .and_then(|job| take(&job.receiver))
+        {
+            let job = self.aero_panel.job.take().expect("completed CFD job");
+            match done {
+                Ok(outcome) => {
+                    if let Some(data) = &outcome.dataset {
+                        self.aero_panel
+                            .set_preview(std::sync::Arc::new(data.clone()));
+                    }
+                    self.aero_panel.completed = Some((job.directory, outcome));
+                }
+                Err(e) => self.aero_panel.error = Some(e),
+            }
+        }
+        if self.analysis_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+    fn prepare_cfd_in(&mut self, parent: std::path::PathBuf, run: bool) {
+        let settings = self
+            .aero_panel
+            .settings
+            .clone()
+            .unwrap_or_else(|| rocket_cfd::CfdSettings::for_vehicle(self.document.rocket()));
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = parent.join(format!("aether-cfd-{stamp}"));
+        match rocket_cfd::prepare_case(self.document.rocket(), &settings, &directory) {
+            Ok(_) => {
+                self.aero_panel.artifact = Some(directory.clone());
+                self.aero_panel.completed = None;
+                self.aero_panel.error = None;
+            }
+            Err(error) => {
+                self.aero_panel.error = Some(error.to_string());
+                return;
+            }
+        }
+        if !run {
+            return;
+        }
+        let python = std::path::PathBuf::from(&self.aero_panel.python);
+        let foam = std::path::PathBuf::from(&self.aero_panel.foam_bashrc);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let token = cancel.clone();
+        let path = directory.clone();
+        match std::thread::Builder::new()
+            .name("aether-cfd".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rocket_cfd::run_case(&path, &python, &foam, &token).map_err(|e| e.to_string())
+                }))
+                .unwrap_or_else(|_| Err("CFD worker failed unexpectedly".into()));
+                let _ = sender.send(result);
+            }) {
+            Ok(_) => {
+                self.aero_panel.job = Some(crate::aerodynamics::CfdJob {
+                    receiver,
+                    cancel,
+                    directory,
+                });
+            }
+            Err(e) => self.aero_panel.error = Some(e.to_string()),
         }
     }
 }

@@ -22,13 +22,17 @@
     clippy::type_complexity
 )]
 
-use rocket_aero::{compute, AeroCoefficients, AeroQuery};
+use rocket_aero::{compute, AeroCoefficients, AeroModel, AeroQuery, AeroSource};
+use rocket_core::validation::ValidationError;
 use rocket_core::{Duration, Force, Length, Mass, Rocket};
 use rocket_motors::Motor;
 use rocket_physics::{angle_of_attack_sideslip, AtmosphereState, IsaAtmosphere, Quaternion, Vec3};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(test)]
 use crate::integrator::rk4_step_6dof;
-use crate::result::{SimResult, TelemetryPoint};
+use crate::integrator::{try_rk4_step_6dof, Derivative6Dof};
+use crate::result::{FlightEvent, FlightSample, SimResult, TelemetryPoint, Termination};
 use crate::state::SimConfig;
 
 /// Standard gravity (m/s²).
@@ -78,6 +82,8 @@ pub struct Simulator6Dof {
     launch_dir: Vec3,
     /// Recovery state.
     recovery: RecoveryState,
+    aerodynamics: AeroModel,
+    aero_reference_length: f64,
 }
 
 /// Recovery system state.
@@ -131,7 +137,10 @@ impl Simulator6Dof {
         let theta = config.launch_angle;
         let launch_dir = Vec3::new(theta.sin(), 0.0, theta.cos());
 
+        let aero_reference_length = compute(&rocket, AeroQuery::at_mach(0.0)).reference_length;
         Self {
+            aerodynamics: AeroModel::Builtin,
+            aero_reference_length,
             rocket,
             motor,
             config,
@@ -158,149 +167,232 @@ impl Simulator6Dof {
         self.run_for(Duration::seconds(300.0))
     }
 
-    /// Run with an explicit maximum duration, including the existing ground stop.
+    /// Set an already validated aerodynamic provider.
+    #[must_use]
+    pub fn with_aerodynamics(mut self, model: AeroModel) -> Self {
+        if let AeroModel::Dataset { data, .. } = &model {
+            self.aero_reference_length = data.metadata.reference_length_m;
+        }
+        self.aerodynamics = model;
+        self
+    }
+
+    /// Run with an explicit duration limit.
     #[must_use]
     pub fn run_for(&self, maximum_duration: Duration) -> SimResult {
-        let max_time = maximum_duration.as_seconds();
-        if !max_time.is_finite() || max_time <= 0.0 {
+        self.run_controlled(maximum_duration, &AtomicBool::new(false))
+    }
+
+    /// Run with step-level cancellation and explicit termination diagnostics.
+    #[must_use]
+    pub fn run_controlled(&self, maximum_duration: Duration, cancelled: &AtomicBool) -> SimResult {
+        let maximum = maximum_duration.as_seconds();
+        if !maximum.is_finite()
+            || maximum <= 0.0
+            || !self.config.time_step.is_finite()
+            || self.config.time_step <= 0.0
+            || !self.config.telemetry_interval.is_finite()
+            || self.config.telemetry_interval <= 0.0
+        {
             return SimResult::empty();
         }
-        if self.config.time_step <= 0.0 || self.config.telemetry_interval <= 0.0 {
-            return SimResult::empty();
-        }
-
-        let dt = self.config.time_step;
-        let ground_z = self.config.pad_altitude.as_meters();
-
-        // Initial attitude: body x-axis aligned with launch direction.
-        let q0 = attitude_from_launch_dir(self.launch_dir);
-
+        let ground = self.config.pad_altitude.as_meters();
         let mut state = SimState6Dof {
             time: Duration::ZERO,
-            position: Vec3::new(0.0, 0.0, ground_z),
+            position: Vec3::new(0.0, 0.0, ground),
             velocity: Vec3::ZERO,
-            quaternion: q0,
+            quaternion: attitude_from_launch_dir(self.launch_dir),
             angular_velocity: Vec3::ZERO,
             mass: self.dry_mass + self.motor.total_mass,
         };
-
         let mut recovery = self.recovery;
-
-        let mut telemetry: Vec<TelemetryPoint> = Vec::with_capacity(1024);
-        let mut next_telemetry_time;
-        let mut max_altitude = ground_z;
-        let mut max_velocity = 0.0_f64;
-        let mut max_accel = 0.0_f64;
-        let mut apogee_time = 0.0_f64;
-        let mut prev_vz = 0.0_f64;
-
-        // Record initial telemetry.
-        let (atm0, aero0, forces0) = self.compute_dynamics(&state, &recovery);
-        let accel0 = forces0.acceleration;
-        telemetry.push(TelemetryPoint {
-            time: state.time,
-            position: state.position.to_tuple(),
-            velocity: state.velocity.to_tuple(),
-            mass: state.mass,
-            thrust: forces0.thrust,
-            drag: forces0.drag,
-            acceleration: accel0,
-        });
-        next_telemetry_time = self.config.telemetry_interval;
-        let _ = (atm0, aero0);
-
-        while state.time.as_seconds() < max_time {
-            let t = state.time.as_seconds();
-
-            // Track maxima.
-            let speed = state.velocity.mag();
-            if speed > max_velocity {
-                max_velocity = speed;
+        let mut result = SimResult {
+            max_local_mach: Some(0.0),
+            max_dynamic_pressure_pa: Some(0.0),
+            termination: Termination::DurationLimit,
+            events: vec![FlightEvent {
+                time_s: 0.0,
+                name: "Ignition".into(),
+            }],
+            ..SimResult::empty()
+        };
+        let mut next_sample = 0.0;
+        let mut previous_vz = 0.0;
+        let mut max_altitude = ground;
+        let mut burnout_recorded = false;
+        loop {
+            let time = state.time.as_seconds();
+            if cancelled.load(Ordering::Relaxed) {
+                result.termination = Termination::Cancelled;
+                break;
             }
-            if state.position.z > max_altitude {
-                max_altitude = state.position.z;
-                apogee_time = t;
+            if !burnout_recorded && time >= self.motor.burn_time() {
+                result.events.push(FlightEvent {
+                    time_s: self.motor.burn_time(),
+                    name: "Burnout".into(),
+                });
+                burnout_recorded = true;
             }
-
-            // Apogee detection: vz crosses zero from positive to negative.
-            if prev_vz > 0.0 && state.velocity.z <= 0.0 && !recovery.drogue_deployed {
-                apogee_time = t;
+            if previous_vz > 0.0 && state.velocity.z <= 0.0 && !recovery.drogue_deployed {
                 recovery.drogue_deployed = true;
-                recovery.drogue_time = Some(t);
+                recovery.drogue_time = Some(time);
+                result.apogee_time = state.time;
+                result.events.push(FlightEvent {
+                    time_s: time,
+                    name: "Apogee / drogue".into(),
+                });
             }
-            prev_vz = state.velocity.z;
-
-            // Main chute deployment at altitude.
+            previous_vz = state.velocity.z;
             if !recovery.main_deployed
                 && recovery.drogue_deployed
-                && (state.position.z - ground_z) <= recovery.main_altitude
+                && state.position.z - ground <= recovery.main_altitude
                 && state.velocity.z < 0.0
             {
                 recovery.main_deployed = true;
-                recovery.main_time = Some(t);
+                recovery.main_time = Some(time);
+                result.events.push(FlightEvent {
+                    time_s: time,
+                    name: "Main deployment".into(),
+                });
             }
-
-            // Evaluate telemetry and integration with the same deployed recovery state.
-            let (_, _, forces) = self.compute_dynamics(&state, &recovery);
-            max_accel = max_accel.max(forces.acceleration);
-
-            // Ground impact.
-            if state.velocity.z < 0.0 && state.position.z <= ground_z {
+            let dynamics = match self.try_compute_dynamics(&state, &recovery) {
+                Ok(dynamics) => dynamics,
+                Err(error) => {
+                    result.termination = termination_for_error(error);
+                    break;
+                }
+            };
+            let speed = state.velocity.mag();
+            result.max_local_mach = Some(result.max_local_mach.unwrap_or(0.0).max(dynamics.1.mach));
+            let airspeed = (state.velocity - Vec3::from_tuple(self.config.wind)).mag();
+            let pressure =
+                0.5 * dynamics.0.density.as_kilograms_per_cubic_meter() * airspeed * airspeed;
+            result.max_dynamic_pressure_pa =
+                Some(result.max_dynamic_pressure_pa.unwrap_or(0.0).max(pressure));
+            if speed > result.max_velocity.as_meters_per_second() {
+                result.max_velocity = rocket_core::Velocity::meters_per_second(speed);
+            }
+            result.max_acceleration = result.max_acceleration.max(dynamics.2.acceleration);
+            if state.position.z > max_altitude {
+                max_altitude = state.position.z;
+                result.apogee_time = state.time;
+            }
+            let landed = state.velocity.z < 0.0 && state.position.z <= ground;
+            if time >= next_sample || landed || time >= maximum {
+                result
+                    .telemetry
+                    .push(self.sample(&state, &recovery, &dynamics));
+                next_sample = time + self.config.telemetry_interval;
+            }
+            if landed {
+                result.termination = Termination::GroundImpact;
+                result.events.push(FlightEvent {
+                    time_s: time,
+                    name: "Ground impact".into(),
+                });
                 break;
             }
-
-            // Record telemetry.
-            if t >= next_telemetry_time {
-                telemetry.push(TelemetryPoint {
-                    time: state.time,
-                    position: state.position.to_tuple(),
-                    velocity: state.velocity.to_tuple(),
-                    mass: state.mass,
-                    thrust: forces.thrust,
-                    drag: forces.drag,
-                    acceleration: forces.acceleration,
-                });
-                next_telemetry_time += self.config.telemetry_interval;
+            if time >= maximum {
+                break;
             }
-
-            // RK4 step.
-            let recovery_snapshot = recovery;
-            state = rk4_step_6dof(&state, dt, |s| self.derivatives(s, &recovery_snapshot));
-            // Recompute mass from the motor schedule.
-            self.update_mass(&mut state);
-            // Renormalize the quaternion to prevent drift.
-            state.quaternion = state.quaternion.normalize();
+            let step = self.config.time_step.min(maximum - time);
+            match try_rk4_step_6dof(&state, step, |s| self.try_derivatives(s, &recovery)) {
+                Ok(mut next) => {
+                    self.update_mass(&mut next);
+                    next.quaternion = next.quaternion.normalize();
+                    if !finite_state(&next) {
+                        result.termination =
+                            Termination::NumericalFailure("Non-finite integration state".into());
+                        break;
+                    }
+                    state = next;
+                }
+                Err(error) => {
+                    result.termination = termination_for_error(error);
+                    break;
+                }
+            }
         }
+        // Preserve the final valid state even when a stop occurs between telemetry ticks.
+        if result.telemetry.last().is_none_or(|p| p.time != state.time) {
+            if let Ok(dynamics) = self.try_compute_dynamics(&state, &recovery) {
+                result
+                    .telemetry
+                    .push(self.sample(&state, &recovery, &dynamics));
+            }
+        }
+        result.max_altitude = Length::meters((max_altitude - ground).max(0.0));
+        result.landing_time = state.time;
+        result.landing_position = (state.position.x, state.position.y);
+        result
+    }
 
-        // Final telemetry.
-        let (_, _, forces_f) = self.compute_dynamics(&state, &recovery);
-        telemetry.push(TelemetryPoint {
+    fn sample(
+        &self,
+        state: &SimState6Dof,
+        recovery: &RecoveryState,
+        dynamics: &(AtmosphereState, AeroCoefficients, Forces),
+    ) -> TelemetryPoint {
+        let (atm, aero, forces) = dynamics;
+        let speed = (state.velocity - Vec3::from_tuple(self.config.wind)).mag();
+        TelemetryPoint {
             time: state.time,
             position: state.position.to_tuple(),
             velocity: state.velocity.to_tuple(),
             mass: state.mass,
-            thrust: forces_f.thrust,
-            drag: forces_f.drag,
-            acceleration: forces_f.acceleration,
-        });
-
-        SimResult {
-            max_altitude: Length::meters(max_altitude - ground_z),
-            max_velocity: rocket_core::Velocity::meters_per_second(max_velocity),
-            max_acceleration: max_accel,
-            apogee_time: Duration::seconds(apogee_time),
-            landing_time: state.time,
-            landing_position: (state.position.x, state.position.y),
-            telemetry,
+            thrust: forces.thrust,
+            drag: forces.drag,
+            acceleration: forces.acceleration,
+            flight: Some(FlightSample {
+                airspeed_m_s: speed,
+                mach: aero.mach,
+                dynamic_pressure_pa: 0.5
+                    * atm.density.as_kilograms_per_cubic_meter()
+                    * speed
+                    * speed,
+                reynolds: forces.reynolds,
+                alpha_rad: aero.alpha,
+                beta_rad: aero.beta,
+                quaternion_wxyz: [
+                    state.quaternion.w,
+                    state.quaternion.x,
+                    state.quaternion.y,
+                    state.quaternion.z,
+                ],
+                angular_rate_rad_s: [
+                    state.angular_velocity.x,
+                    state.angular_velocity.y,
+                    state.angular_velocity.z,
+                ],
+                acceleration_m_s2: [forces.accel_vec.x, forces.accel_vec.y, forces.accel_vec.z],
+                density_kg_m3: atm.density.as_kilograms_per_cubic_meter(),
+                temperature_k: atm.temperature.as_kelvin(),
+                drogue_deployed: recovery.drogue_deployed,
+                main_deployed: recovery.main_deployed,
+                aero_source: forces.source,
+            }),
         }
     }
 
-    /// Compute the full dynamics (atmosphere, aero, forces) at a state.
+    #[cfg(test)]
     fn compute_dynamics(
         &self,
         state: &SimState6Dof,
         recovery: &RecoveryState,
     ) -> (AtmosphereState, AeroCoefficients, Forces) {
+        self.try_compute_dynamics(state, recovery)
+            .expect("valid builtin dynamics")
+    }
+
+    /// Compute the full dynamics (atmosphere, aero, forces) at a state.
+    fn try_compute_dynamics(
+        &self,
+        state: &SimState6Dof,
+        recovery: &RecoveryState,
+    ) -> Result<(AtmosphereState, AeroCoefficients, Forces), ValidationError> {
+        if !finite_state(state) {
+            return Err(ValidationError("Numerical: non-finite flight state".into()));
+        }
         let t = state.time;
         let thrust_n = if t.as_seconds() < self.motor.burn_time() {
             self.motor.thrust_at(t).as_newtons()
@@ -330,22 +422,46 @@ impl Simulator6Dof {
 
         let (alpha, beta) = angle_of_attack_sideslip(v_rel_body);
 
-        let aero = compute(
-            &self.rocket,
-            AeroQuery {
-                mach,
-                alpha,
-                beta,
-                roll_rate: state.angular_velocity.x,
-                pitch_rate: state.angular_velocity.y,
-                reynolds: 0.0,
-            },
-        );
+        let reynolds = rho * v_rel_mag * self.aero_reference_length / atm.dynamic_viscosity();
+        let query = AeroQuery {
+            mach,
+            alpha,
+            beta,
+            roll_rate: state.angular_velocity.x,
+            pitch_rate: state.angular_velocity.y,
+            reynolds,
+        };
+        let (aero, source) = if v_rel_mag < 1e-8 {
+            (
+                AeroCoefficients::zero(mach, alpha, beta),
+                AeroSource::ZeroAirspeed,
+            )
+        } else {
+            self.aerodynamics
+                .evaluate(&self.rocket, query, self.mass_properties_at(t).0)?
+        };
 
         let q_bar = 0.5 * rho * v_rel_mag * v_rel_mag;
-        let forces = Self::assemble_forces(state, &aero, q_bar, thrust_n, v_rel_body, recovery);
-
-        (atm, aero, forces)
+        let mut forces = Self::assemble_forces(state, &aero, q_bar, thrust_n, v_rel_body, recovery);
+        forces.source = source;
+        forces.reynolds = reynolds;
+        if !forces.acceleration.is_finite()
+            || ![
+                aero.c_a,
+                aero.c_n,
+                aero.c_y,
+                aero.c_l,
+                aero.c_m,
+                aero.c_n_yaw,
+            ]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Err(ValidationError(
+                "Numerical: non-finite aerodynamic force".into(),
+            ));
+        }
+        Ok((atm, aero, forces))
     }
 
     /// Assemble forces in the body frame, then compute the
@@ -407,6 +523,8 @@ impl Simulator6Dof {
         let drag = Force::newtons(q_bar * ref_a * aero.c_a + recovery_drag);
 
         Forces {
+            source: AeroSource::Builtin,
+            reynolds: 0.0,
             acceleration: accel_mag,
             thrust,
             drag,
@@ -415,17 +533,17 @@ impl Simulator6Dof {
     }
 
     /// Compute the time derivatives of the 13-dim state.
-    fn derivatives(
+    #[cfg(test)]
+    fn derivatives(&self, state: &SimState6Dof, recovery: &RecoveryState) -> Derivative6Dof {
+        self.try_derivatives(state, recovery)
+            .expect("builtin derivative")
+    }
+    fn try_derivatives(
         &self,
         state: &SimState6Dof,
         recovery: &RecoveryState,
-    ) -> (
-        (f64, f64, f64),
-        (f64, f64, f64),
-        (f64, f64, f64, f64),
-        (f64, f64, f64),
-    ) {
-        let (atm, aero, forces) = self.compute_dynamics(state, recovery);
+    ) -> Result<Derivative6Dof, ValidationError> {
+        let (atm, aero, forces) = self.try_compute_dynamics(state, recovery)?;
         let (_, i_axial, i_transverse) = self.mass_properties_at(state.time);
         let v_rel_launch = state.velocity - Vec3::from_tuple(self.config.wind);
         let rho = atm.density.as_kilograms_per_cubic_meter();
@@ -469,12 +587,12 @@ impl Simulator6Dof {
         let omega_quat = Quaternion::new(0.0, omega.x, omega.y, omega.z);
         let q_dot = state.quaternion.hamilton(omega_quat) * 0.5;
 
-        (
+        Ok((
             (state.velocity.x, state.velocity.y, state.velocity.z),
             (accel.x, accel.y, accel.z),
             (q_dot.w, q_dot.x, q_dot.y, q_dot.z),
             (omega_dot.x, omega_dot.y, omega_dot.z),
-        )
+        ))
     }
 
     /// Compute mass properties at time `t` (derived, not integrated).
@@ -522,8 +640,39 @@ impl Simulator6Dof {
     }
 }
 
+fn finite_state(state: &SimState6Dof) -> bool {
+    [
+        state.time.as_seconds(),
+        state.position.x,
+        state.position.y,
+        state.position.z,
+        state.velocity.x,
+        state.velocity.y,
+        state.velocity.z,
+        state.quaternion.w,
+        state.quaternion.x,
+        state.quaternion.y,
+        state.quaternion.z,
+        state.angular_velocity.x,
+        state.angular_velocity.y,
+        state.angular_velocity.z,
+        state.mass.as_kilograms(),
+    ]
+    .iter()
+    .all(|v| v.is_finite())
+}
+fn termination_for_error(error: ValidationError) -> Termination {
+    if error.0.starts_with("Numerical:") {
+        Termination::NumericalFailure(error.0)
+    } else {
+        Termination::ModelDomainLimit(error.0)
+    }
+}
+
 /// Forces computed at a state, for telemetry.
 struct Forces {
+    source: AeroSource,
+    reynolds: f64,
     acceleration: f64,
     thrust: Force,
     drag: Force,

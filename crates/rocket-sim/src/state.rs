@@ -200,6 +200,7 @@ impl Simulator {
             thrust: thrust0,
             drag: drag0,
             acceleration: accel0,
+            flight: None,
         });
         next_telemetry_time = self.config.telemetry_interval;
 
@@ -241,6 +242,7 @@ impl Simulator {
                     thrust,
                     drag,
                     acceleration: accel,
+                    flight: None,
                 });
                 next_telemetry_time += self.config.telemetry_interval;
             }
@@ -261,12 +263,21 @@ impl Simulator {
             thrust: thrust_f,
             drag: drag_f,
             acceleration: accel_f,
+            flight: None,
         });
 
         let landing_time = state.time.as_seconds();
         let landing_position = (state.position.0, state.position.1);
 
         SimResult {
+            max_local_mach: None,
+            max_dynamic_pressure_pa: None,
+            termination: if state.position.2 <= ground_z && state.velocity.2 < 0.0 {
+                crate::Termination::GroundImpact
+            } else {
+                crate::Termination::DurationLimit
+            },
+            events: Vec::new(),
             max_altitude: Length::meters(max_altitude - ground_z),
             max_velocity: Velocity::meters_per_second(max_velocity),
             max_acceleration: max_accel,

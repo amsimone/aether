@@ -22,6 +22,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run the saved flight case and write a self-contained run record.
+    Simulate {
+        project: std::path::PathBuf,
+        #[arg(long)]
+        output: std::path::PathBuf,
+        #[arg(long)]
+        csv: Option<std::path::PathBuf>,
+        #[arg(long)]
+        aerodynamic_dataset: Option<std::path::PathBuf>,
+        #[arg(long)]
+        outside_domain_fallback: bool,
+    },
+    /// Export a fresh reproducible `OpenFOAM` study directory.
+    CfdPrepare {
+        project: std::path::PathBuf,
+        directory: std::path::PathBuf,
+        #[arg(long, default_value_t = 0.2)]
+        mach: f64,
+        #[arg(long, default_value_t = 0.0)]
+        alpha: f64,
+        #[arg(long)]
+        mesh_size: Option<f64>,
+        #[arg(long, default_value_t = 600)]
+        iterations: u32,
+    },
+    /// Execute an exported CFD study using installed Gmsh/OpenFOAM tools.
+    CfdRun {
+        directory: std::path::PathBuf,
+        #[arg(long, default_value = "python3")]
+        python: std::path::PathBuf,
+        #[arg(long)]
+        foam_bashrc: std::path::PathBuf,
+    },
     /// Show the current status of the Aether installation.
     Status,
 
@@ -71,11 +104,21 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(
+            command @ (Commands::Simulate { .. }
+            | Commands::CfdPrepare { .. }
+            | Commands::CfdRun { .. }),
+        ) => {
+            if let Err(error) = run_analysis(command) {
+                eprintln!("Error: {error}");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Status) => {
             println!("aether {}", env!("CARGO_PKG_VERSION"));
-            println!("Status: Phase 0 — scaffolding and de-risking");
-            println!("UI:     implemented (egui + wgpu spike, Phase-0 Task 2)");
-            println!("Motors: implemented (ThrustCurve API + cache, Phase-0 Task 4)");
+            println!("Status: Experimental engineering workbench");
+            println!("UI:     Design, Flight case, Results, Aerodynamics");
+            println!("Analysis: simulate, cfd-prepare, cfd-run; see --help");
         }
         Some(Commands::Motors { action }) => {
             if let Err(e) = run_motors_command(action).await {
@@ -89,6 +132,97 @@ async fn main() {
             println!("Use --help to see available commands.");
         }
     }
+}
+
+fn run_analysis(command: Commands) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match command {
+        Commands::Simulate {
+            project,
+            output,
+            csv,
+            aerodynamic_dataset,
+            outside_domain_fallback,
+        } => {
+            let mut project = rocket_io::load_project_from_path(project)?;
+            if let Some(path) = aerodynamic_dataset {
+                project.case.aerodynamics = rocket_aero::AeroModel::Dataset {
+                    data: std::sync::Arc::new(rocket_io::load_aero_dataset(path)?),
+                    outside_domain: if outside_domain_fallback {
+                        rocket_aero::DomainPolicy::BuiltinFallback
+                    } else {
+                        rocket_aero::DomainPolicy::Stop
+                    },
+                };
+            }
+            let result = project.case.run(&project.rocket)?;
+            let record = rocket_sim::RunRecord::capture(project.rocket, project.case, result, 0);
+            rocket_io::save_run_to_path(&record, output)?;
+            if let Some(path) = csv {
+                rocket_io::save_telemetry_csv(&record, path)?;
+            }
+            println!(
+                "Run {}: {:?}; apogee {:.3} m AGL; {} samples",
+                record.id,
+                record.result.termination,
+                record.result.max_altitude.as_meters(),
+                record.result.telemetry.len()
+            );
+            if !matches!(
+                record.result.termination,
+                rocket_sim::Termination::GroundImpact | rocket_sim::Termination::DurationLimit
+            ) {
+                return Err(std::io::Error::other(
+                    "Propagation stopped early; retained record contains diagnostics",
+                )
+                .into());
+            }
+        }
+        Commands::CfdPrepare {
+            project,
+            directory,
+            mach,
+            alpha,
+            mesh_size,
+            iterations,
+        } => {
+            let project = rocket_io::load_project_from_path(project)?;
+            let mut settings = rocket_cfd::CfdSettings::for_vehicle(&project.rocket);
+            settings.mach = mach;
+            settings.alpha_deg = alpha;
+            settings.iterations = iterations;
+            if let Some(size) = mesh_size {
+                settings.mesh_size_m = size;
+            }
+            let path = rocket_cfd::prepare_case(&project.rocket, &settings, directory)?;
+            println!("Exported {}", path.display());
+        }
+        Commands::CfdRun {
+            directory,
+            python,
+            foam_bashrc,
+        } => {
+            let result = rocket_cfd::run_case(
+                &directory,
+                &python,
+                &foam_bashrc,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
+            println!(
+                "{} cells; {} iterations; converged: {}; CA: {:.6}; CN: {:.6}; Cm: {:.6}",
+                result.mesh_cells,
+                result.iterations,
+                result.converged,
+                result.coefficients.ca,
+                result.coefficients.cn,
+                result.coefficients.cm
+            );
+            if !result.converged {
+                return Err(std::io::Error::other("CFD did not meet convergence criteria; raw outputs retained, no activation dataset created").into());
+            }
+        }
+        _ => unreachable!("analysis command"),
+    }
+    Ok(())
 }
 
 async fn run_motors_command(action: MotorsAction) -> Result<(), Box<dyn std::error::Error>> {

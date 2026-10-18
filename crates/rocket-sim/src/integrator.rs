@@ -109,19 +109,30 @@ where
 /// Mass is recomputed by the caller after the step (derived, not
 /// integrated). The quaternion is renormalized by the caller after the
 /// step to prevent drift.
+pub type Derivative6Dof = (
+    (f64, f64, f64),
+    (f64, f64, f64),
+    (f64, f64, f64, f64),
+    (f64, f64, f64),
+);
+
+#[cfg(test)]
 pub fn rk4_step_6dof<F>(state: &SimState6Dof, dt: f64, f: F) -> SimState6Dof
 where
-    F: Fn(
-        &SimState6Dof,
-    ) -> (
-        (f64, f64, f64),
-        (f64, f64, f64),
-        (f64, f64, f64, f64),
-        (f64, f64, f64),
-    ),
+    F: Fn(&SimState6Dof) -> Derivative6Dof,
+{
+    match try_rk4_step_6dof(state, dt, |s| Ok::<_, std::convert::Infallible>(f(s))) {
+        Ok(state) => state,
+        Err(never) => match never {},
+    }
+}
+
+pub fn try_rk4_step_6dof<F, E>(state: &SimState6Dof, dt: f64, f: F) -> Result<SimState6Dof, E>
+where
+    F: Fn(&SimState6Dof) -> Result<Derivative6Dof, E>,
 {
     // k1
-    let (k1_p, k1_v, k1_q, k1_w) = f(state);
+    let (k1_p, k1_v, k1_q, k1_w) = f(state)?;
 
     let s2 = SimState6Dof {
         time: Duration::seconds(state.time.as_seconds() + dt / 2.0),
@@ -136,7 +147,7 @@ where
         angular_velocity: state.angular_velocity + Vec3::from_tuple(k1_w) * (dt / 2.0),
         mass: state.mass,
     };
-    let (k2_p, k2_v, k2_q, k2_w) = f(&s2);
+    let (k2_p, k2_v, k2_q, k2_w) = f(&s2)?;
 
     let s3 = SimState6Dof {
         time: Duration::seconds(state.time.as_seconds() + dt / 2.0),
@@ -151,7 +162,7 @@ where
         angular_velocity: state.angular_velocity + Vec3::from_tuple(k2_w) * (dt / 2.0),
         mass: state.mass,
     };
-    let (k3_p, k3_v, k3_q, k3_w) = f(&s3);
+    let (k3_p, k3_v, k3_q, k3_w) = f(&s3)?;
 
     let s4 = SimState6Dof {
         time: Duration::seconds(state.time.as_seconds() + dt),
@@ -166,7 +177,7 @@ where
         angular_velocity: state.angular_velocity + Vec3::from_tuple(k3_w) * dt,
         mass: state.mass,
     };
-    let (k4_p, k4_v, k4_q, k4_w) = f(&s4);
+    let (k4_p, k4_v, k4_q, k4_w) = f(&s4)?;
 
     // Combine.
     let new_pos = state.position
@@ -194,14 +205,14 @@ where
             k1_w.2 + 2.0 * k2_w.2 + 2.0 * k3_w.2 + k4_w.2,
         )) * (dt / 6.0);
 
-    SimState6Dof {
+    Ok(SimState6Dof {
         time: Duration::seconds(state.time.as_seconds() + dt),
         position: new_pos,
         velocity: new_vel,
         quaternion: new_q,
         angular_velocity: new_w,
         mass: state.mass,
-    }
+    })
 }
 
 #[cfg(test)]

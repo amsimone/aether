@@ -20,7 +20,11 @@ use std::path::Path;
 
 use rocket_core::Rocket;
 use serde::Deserialize;
+mod analysis;
 mod project;
+pub use analysis::{
+    load_aero_dataset, load_run_from_path, save_run_to_path, save_telemetry_csv, telemetry_csv,
+};
 pub use project::{
     load_project_from_json, load_project_from_path, save_project_to_json, save_project_to_path,
     Project, PROJECT_SCHEMA_VERSION,

@@ -94,8 +94,9 @@ Rejected. Locks users into our service, breaks offline use, and creates a single
 
 ## Implementation extension: projects with flight cases (18 October 2026)
 
-The local-file decision remains in force. Current UI saves use a schema-2
-project envelope with `version`, `rocket` (the schema-1 vehicle), and `case`
+The local-file decision remains in force. Current UI saves use a schema-3
+project envelope with `version`, `rocket` (the schema-1 vehicle), `runs`
+(immutable, complete run records), and `case`
 (one named, resolved simulation configuration). Motor curves and source comments
 are embedded, alongside environment, recovery, model selection, and numerical
 settings. See `rocket-io::Project` and `rocket-sim::SimulationCase`.
@@ -109,5 +110,8 @@ or normal window close.
 
 The implementation currently uses stable numeric IDs and bounded snapshot-based
 undo commands, rather than the serializable patch log proposed above. It does
-not yet implement external modification detection, crash recovery, retained run
-records, or collaboration. These remain future work.
+not yet implement external modification detection, crash recovery, or
+collaboration. Schema-2 projects migrate with an empty run list. Run records
+embed their own vehicle, case (including aerodynamic data), source/solver
+identifiers, explicit termination, events, and telemetry. New results make the
+document dirty and survive input undo/redo. These remain future work.

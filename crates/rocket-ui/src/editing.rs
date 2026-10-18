@@ -56,7 +56,15 @@ impl DesignDocument {
         self.revision
     }
     pub fn is_dirty(&self) -> bool {
-        self.project != self.saved
+        self.project.rocket != self.saved.rocket
+            || self.project.case != self.saved.case
+            || self.project.runs.len() != self.saved.runs.len()
+            || self
+                .project
+                .runs
+                .iter()
+                .zip(&self.saved.runs)
+                .any(|(a, b)| !std::sync::Arc::ptr_eq(a, b))
     }
     pub fn mark_saved(&mut self) {
         self.saved = self.project.clone();
@@ -155,6 +163,18 @@ impl DesignDocument {
         self.commit(project, pointer.then_some(Target::Case))
     }
 
+    /// Retaining a run changes persisted content without becoming a vehicle edit command.
+    pub fn retain_run(&mut self, run: rocket_sim::RunRecord) -> Result<(), ValidationError> {
+        run.validate()?;
+        if self.project.runs.iter().any(|r| r.id == run.id) {
+            return Err(ValidationError("Duplicate run ID".into()));
+        }
+        self.project.runs.push(std::sync::Arc::new(run));
+        self.revision += 1;
+        self.end_gesture();
+        Ok(())
+    }
+
     fn commit(
         &mut self,
         project: Project,
@@ -198,7 +218,8 @@ impl DesignDocument {
         let Some(edit) = self.undo.pop() else {
             return false;
         };
-        self.project = edit.before.clone();
+        self.project.rocket = edit.before.rocket.clone();
+        self.project.case = edit.before.case.clone();
         self.redo.push(edit);
         self.revision += 1;
         true
@@ -208,7 +229,8 @@ impl DesignDocument {
         let Some(edit) = self.redo.pop() else {
             return false;
         };
-        self.project = edit.after.clone();
+        self.project.rocket = edit.after.rocket.clone();
+        self.project.case = edit.after.case.clone();
         self.undo.push(edit);
         self.revision += 1;
         true
@@ -435,5 +457,37 @@ mod tests {
             guard.request(action, true);
             assert_eq!(guard.decide(Decision::Discard), Some(action));
         }
+    }
+}
+
+#[cfg(test)]
+mod retained_run_tests {
+    use super::*;
+    #[test]
+    fn undoing_inputs_preserves_completed_runs_and_save_baselines_include_results() {
+        let project = crate::simulate::reference_project(crate::reference::reference_rocket());
+        let mut doc = DesignDocument::from_project(project);
+        let mut case = doc.case().clone();
+        case.maximum_duration_s = 0.1;
+        doc.edit_case(case, false).expect("case edit");
+        let result = doc.case().run(doc.rocket()).expect("run");
+        let run = rocket_sim::RunRecord::capture(
+            doc.rocket().clone(),
+            doc.case().clone(),
+            result,
+            doc.revision(),
+        );
+        let id = run.id.clone();
+        doc.retain_run(run).expect("retain");
+        assert!(doc.undo());
+        assert_eq!(doc.project().runs[0].id, id);
+        assert!(doc.is_dirty());
+        doc.mark_saved();
+        assert!(!doc.is_dirty());
+        assert!(doc.redo());
+        assert!(doc.is_dirty());
+        assert!(doc.undo());
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.project().runs.len(), 1);
     }
 }

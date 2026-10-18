@@ -1,12 +1,13 @@
 //! Case editing and execution; widgets do not own engineering settings.
 #![allow(clippy::too_many_lines)]
 
-use crate::{app::AetherApp, plots};
+use crate::app::AetherApp;
 use eframe::egui;
 use rocket_core::{Length, Rocket};
 use rocket_io::Project;
 use rocket_motors::Motor;
-use rocket_sim::SimResult;
+use rocket_sim::RunRecord;
+use std::sync::{atomic::AtomicBool, mpsc::Receiver, Arc};
 
 const BUILTIN_MOTORS: &[&str] = &[
     include_str!("../../../tests/fixtures/motors/estes_a8_3.eng"),
@@ -14,12 +15,15 @@ const BUILTIN_MOTORS: &[&str] = &[
     include_str!("../../../tests/fixtures/motors/estes_c6.eng"),
 ];
 
-/// Transient presentation state. All run inputs live in the document's case.
+pub struct FlightJob {
+    pub receiver: Receiver<Result<RunRecord, String>>,
+    pub cancel: Arc<AtomicBool>,
+}
+/// Catalog and background-job state only; accepted inputs and retained results live in the document.
 #[derive(Default)]
 pub struct SimPanelState {
     pub available_motors: Vec<(String, Motor)>,
-    pub result: Option<SimResult>,
-    pub playback_time: f64,
+    pub job: Option<FlightJob>,
     pub error: Option<String>,
 }
 impl SimPanelState {
@@ -144,7 +148,17 @@ pub fn show_simulate_panel(app: &mut AetherApp, ui: &mut egui::Ui) {
         );
     });
     ui.collapsing("Models and numerics", |ui| {
-        ui.label("Rigid 6-DOF · built-in aero v1");
+        ui.label("Rigid 6-DOF");
+        ui.label(match &case.aerodynamics {
+            rocket_aero::AeroModel::Builtin => "Built-in aero v1".to_string(),
+            rocket_aero::AeroModel::Dataset {
+                data,
+                outside_domain,
+            } => format!(
+                "{} · outside domain: {:?}",
+                data.metadata.name, outside_domain
+            ),
+        });
         ui.label("ISA · constant gravity · fixed-step RK4");
         number(
             ui,
@@ -186,37 +200,33 @@ pub fn show_simulate_panel(app: &mut AetherApp, ui: &mut egui::Ui) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     ui.add_space(8.0);
+    let can_run = app.document.case().motor.is_some() && app.sim_panel.job.is_none();
     if ui
         .add_enabled(
-            app.document.case().motor.is_some(),
-            egui::Button::new("Run case").min_size(egui::vec2(ui.available_width(), 32.0)),
+            can_run,
+            egui::Button::new("Run case → Results")
+                .min_size(egui::vec2(ui.available_width(), 32.0)),
         )
         .clicked()
     {
-        match app.document.case().run(app.document.rocket()) {
-            Ok(result) => {
-                app.sim_panel.result = Some(result);
-                app.sim_panel.playback_time = 0.0;
-                app.sim_panel.error = None;
-            }
-            Err(error) => app.sim_panel.error = Some(error.to_string()),
+        app.start_run();
+        ui.ctx().request_repaint();
+    }
+    if app.sim_panel.job.is_some() {
+        ui.spinner();
+        ui.label("Running captured inputs in the background.");
+        if ui.button("Cancel run").clicked() {
+            app.cancel_run();
         }
     }
-    let result = app.sim_panel.result.clone();
-    if let Some(result) = result {
-        ui.add_space(8.0);
-        show_results(ui, &result);
-        ui.add(
-            egui::Slider::new(
-                &mut app.sim_panel.playback_time,
-                0.0..=result.landing_time.as_seconds(),
-            )
-            .text("Time")
-            .suffix(" s"),
-        );
-        plots::show_altitude_plot(ui, &result);
-        plots::show_velocity_plot(ui, &result);
-        plots::show_thrust_plot(ui, &result);
+    if !app.document.project().runs.is_empty() {
+        ui.label(format!(
+            "{} retained runs in this project",
+            app.document.project().runs.len()
+        ));
+        if ui.button("Open results workspace").clicked() {
+            app.show_results();
+        }
     }
 }
 
@@ -243,61 +253,6 @@ fn number(
         .inner
     })
     .inner
-}
-
-/// Show the simulation results summary.
-fn show_results(ui: &mut egui::Ui, result: &SimResult) {
-    ui.label(egui::RichText::new("Results").strong());
-    ui.add_space(2.0);
-
-    result_row(
-        ui,
-        "Apogee:",
-        &format!("{:.1} m", result.max_altitude.as_meters()),
-    );
-    result_row(
-        ui,
-        "Max velocity:",
-        &format!("{:.1} m/s", result.max_velocity.as_meters_per_second()),
-    );
-    result_row(ui, "Max Mach:", &format!("{:.2}", result.max_mach()));
-    result_row(
-        ui,
-        "Max accel:",
-        &format!("{:.1} m/s²", result.max_acceleration),
-    );
-    result_row(
-        ui,
-        "Apogee time:",
-        &format!("{:.2} s", result.apogee_time.as_seconds()),
-    );
-    result_row(
-        ui,
-        "Run end time:",
-        &format!("{:.2} s", result.landing_time.as_seconds()),
-    );
-    result_row(
-        ui,
-        "End distance:",
-        &format!(
-            "{:.1} m",
-            (result.landing_position.0.powi(2) + result.landing_position.1.powi(2)).sqrt()
-        ),
-    );
-}
-
-/// A label + value row for the results table.
-fn result_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(egui::Color32::from_gray(160)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(value)
-                    .strong()
-                    .color(egui::Color32::from_gray(220)),
-            );
-        });
-    });
 }
 
 #[cfg(test)]

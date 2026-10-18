@@ -17,8 +17,13 @@
 #![warn(clippy::pedantic)]
 
 pub mod buildup;
+pub mod dataset;
 pub mod design;
 pub mod drag;
+pub use dataset::{
+    vehicle_fingerprint, AeroDataset, AeroModel, AeroSource, CoefficientRow, DatasetMetadata,
+    DomainPolicy,
+};
 
 pub use buildup::{compute, AeroCoefficients, AeroQuery};
 pub use design::{estimate, static_margin, DesignAero};

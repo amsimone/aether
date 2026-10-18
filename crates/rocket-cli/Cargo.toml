@@ -14,6 +14,10 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 rocket-motors = { path = "../rocket-motors", version = "0.1.0" }
+rocket-io = { path = "../rocket-io", version = "0.1.0" }
+rocket-sim = { path = "../rocket-sim", version = "0.1.0" }
+rocket-aero = { path = "../rocket-aero", version = "0.1.0" }
+rocket-cfd = { path = "../rocket-cfd", version = "0.1.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lints]

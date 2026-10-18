@@ -1,9 +1,48 @@
 //! Simulation result and telemetry types.
 
 use rocket_core::{Duration, Force, Length, Mass, Velocity};
+use serde::{Deserialize, Serialize};
+
+/// Additional 6-DOF telemetry, with SI units and body-to-launch quaternion order w,x,y,z.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlightSample {
+    pub airspeed_m_s: f64,
+    pub mach: f64,
+    pub dynamic_pressure_pa: f64,
+    pub reynolds: f64,
+    pub alpha_rad: f64,
+    pub beta_rad: f64,
+    pub quaternion_wxyz: [f64; 4],
+    pub angular_rate_rad_s: [f64; 3],
+    pub acceleration_m_s2: [f64; 3],
+    pub density_kg_m3: f64,
+    pub temperature_k: f64,
+    pub drogue_deployed: bool,
+    pub main_deployed: bool,
+    pub aero_source: rocket_aero::AeroSource,
+}
+
+/// A run's actual outcome, independent of its last recorded position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum Termination {
+    GroundImpact,
+    DurationLimit,
+    Cancelled,
+    NumericalFailure(String),
+    ModelDomainLimit(String),
+    InvalidInput,
+}
+
+/// Timestamped event; crossing times currently have fixed-step resolution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlightEvent {
+    pub time_s: f64,
+    pub name: String,
+}
 
 /// A single telemetry sample from the flight simulation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TelemetryPoint {
     /// Time since ignition.
     pub time: Duration,
@@ -19,11 +58,17 @@ pub struct TelemetryPoint {
     pub drag: Force,
     /// Acceleration magnitude at this time (m/s²).
     pub acceleration: f64,
+    pub flight: Option<FlightSample>,
 }
 
 /// The result of a flight simulation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimResult {
+    /// Local-air maxima evaluated at integration states (not just exported sample times).
+    pub max_local_mach: Option<f64>,
+    pub max_dynamic_pressure_pa: Option<f64>,
+    pub termination: Termination,
+    pub events: Vec<FlightEvent>,
     /// Maximum altitude above the pad (apogee height).
     pub max_altitude: Length,
     /// Maximum speed reached during the flight.
@@ -45,6 +90,10 @@ impl SimResult {
     #[must_use]
     pub fn empty() -> Self {
         Self {
+            max_local_mach: None,
+            max_dynamic_pressure_pa: None,
+            termination: Termination::InvalidInput,
+            events: Vec::new(),
             max_altitude: Length::ZERO,
             max_velocity: Velocity::ZERO,
             max_acceleration: 0.0,
@@ -69,6 +118,16 @@ impl SimResult {
     #[must_use]
     pub fn max_mach(&self) -> f64 {
         const A_SEA_LEVEL: f64 = 340.3;
+        if let Some(value) = self.max_local_mach {
+            return value;
+        }
+        if self.telemetry.iter().any(|p| p.flight.is_some()) {
+            return self
+                .telemetry
+                .iter()
+                .filter_map(|p| p.flight.map(|f| f.mach))
+                .fold(0.0, f64::max);
+        }
         self.max_velocity.as_meters_per_second() / A_SEA_LEVEL
     }
 
@@ -114,6 +173,10 @@ mod tests {
     #[test]
     fn max_mach_uses_sea_level_speed_of_sound() {
         let r = SimResult {
+            max_local_mach: None,
+            max_dynamic_pressure_pa: None,
+            termination: Termination::DurationLimit,
+            events: Vec::new(),
             max_altitude: Length::ZERO,
             max_velocity: Velocity::meters_per_second(340.3),
             max_acceleration: 0.0,
