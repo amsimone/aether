@@ -22,11 +22,13 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+mod dopri5;
 mod integrator;
 mod result;
 mod state;
 mod state6dof;
 
+pub use dopri5::{step as dopri5_step, Dopri5Config, Dopri5Step};
 pub use result::{SimResult, TelemetryPoint};
 pub use state::{SimConfig, SimState, Simulator, DEFAULT_TIME_STEP};
 pub use state6dof::{RecoveryState, SimState6Dof, Simulator6Dof};
