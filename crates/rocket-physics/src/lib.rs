@@ -17,5 +17,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod atmosphere;
+pub mod math;
 
-pub use atmosphere::{AtmosphereState, IsaAtmosphere};
+pub use atmosphere::{AtmosphereState, IsaAtmosphere, Us1976};
+pub use math::{angle_of_attack_sideslip, Quaternion, Rotation3, Vec3};

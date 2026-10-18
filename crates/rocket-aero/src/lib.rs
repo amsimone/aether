@@ -16,8 +16,10 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod buildup;
 pub mod design;
 pub mod drag;
 
+pub use buildup::{compute, AeroCoefficients, AeroQuery};
 pub use design::{estimate, static_margin, DesignAero};
 pub use drag::{estimate_cd, estimate_cd_breakdown, DragBreakdown};

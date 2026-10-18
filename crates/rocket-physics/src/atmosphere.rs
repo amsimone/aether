@@ -1,35 +1,28 @@
 //! Atmosphere models for the Aether rocket simulator.
 //!
-//! Currently provides the International Standard Atmosphere (ISA) model
-//! for the troposphere (0–11 km), which is the T0 fidelity tier used by
-//! Phase 2's flight simulator. Phase 3 will add the US-1976 atmosphere
-//! (stratopause and mesosphere) and Phase 4 will add NRLMSISE-00.
+//! Currently provides:
+//! - The International Standard Atmosphere (ISA) troposphere model
+//!   (0–11 km), used as the T0 fidelity tier by Phase 2's flight sim.
+//! - The US-1976 standard atmosphere (0–50 km), used by Phase 3's 6-DOF
+//!   sim. This covers the troposphere, stratosphere, and stratopause
+//!   with piecewise-constant lapse rates.
+//! - Phase 4 will add NRLMSISE-00 for T2 (Karman line).
 //!
 //! ## Reference
 //!
-//! ISO 2533:1975 / ICAO Doc 7488. The troposphere is modelled as a
-//! polytropic atmosphere with a constant lapse rate of 6.5 K/km.
+//! ISO 2533:1975 / ICAO Doc 7488 for the troposphere; NASA-TM-X-74335
+//! / NOAA-S/T 76-1562 for the US-1976 standard atmosphere.
 //!
 //! ## Formulas
 //!
-//! - Temperature: `T(h) = T₀ − L·h`
-//! - Pressure:    `P(h) = P₀ · (1 − L·h/T₀)^(g·M/(R·L))`
-//! - Density:     `ρ(h) = P(h) / (R_specific · T(h))`
+//! For a layer with base temperature `T_b`, base pressure `P_b`, lapse
+//! rate `L`, and base altitude `h_b`:
+//!
+//! - Temperature: `T(h) = T_b + L · (h − h_b)`  (or `T_b` if `L = 0`)
+//! - Pressure (lapse ≠ 0): `P(h) = P_b · (T_b / T)^(g·M/(R·L))`
+//! - Pressure (isothermal): `P(h) = P_b · exp(−g·M·(h − h_b) / (R·T_b))`
+//! - Density: `ρ(h) = P(h) / (R_specific · T(h))`
 //! - Speed of sound: `a(h) = √(γ · R_specific · T(h))`
-//!
-//! where:
-//! - `T₀ = 288.15 K`  (sea-level temperature)
-//! - `P₀ = 101325 Pa` (sea-level pressure)
-//! - `L = 0.0065 K/m` (tropospheric lapse rate)
-//! - `g = 9.80665 m/s²` (standard gravity)
-//! - `M = 0.0289644 kg/mol` (molar mass of dry air)
-//! - `R = 8.314462 J/(mol·K)` (universal gas constant)
-//! - `R_specific = R/M = 287.0529 J/(kg·K)`
-//! - `γ = 1.4` (ratio of specific heats for dry air)
-//!
-//! Valid for `0 ≤ h ≤ 11 km` (troposphere). Above 11 km the lapse rate
-//! changes; `IsaAtmosphere::at` clamps the input to 11 km to avoid
-//! giving wrong answers silently.
 
 use rocket_core::{Density, Length, Pressure, Temperature, Velocity};
 
@@ -47,7 +40,7 @@ const M_AIR: f64 = 0.028_964_4;
 const R_UNIV: f64 = 8.314_462;
 /// Ratio of specific heats for dry air.
 const GAMMA: f64 = 1.4;
-/// Tropopause altitude (m); above this the lapse rate changes.
+/// Tropopause altitude (m).
 const TROPOPAUSE: f64 = 11_000.0;
 
 /// Specific gas constant for dry air, `R/M` (J/(kg·K)).
@@ -100,6 +93,10 @@ impl AtmosphereState {
 /// Construct with `IsaAtmosphere::new()` and query with `.at(altitude)`.
 /// The sea-level constants can be overridden for non-standard days
 /// (e.g. a hot launch site) via `with_sea_level(t0, p0)`.
+///
+/// This is a thin convenience wrapper that clamps the input to the
+/// troposphere (0–11 km). For flights above 11 km, use [`Us1976`]
+/// directly.
 #[derive(Debug, Clone, Copy)]
 pub struct IsaAtmosphere {
     /// Sea-level temperature (K).
@@ -173,6 +170,142 @@ impl IsaAtmosphere {
     }
 }
 
+/// A layer of the US-1976 atmosphere.
+///
+/// Each layer has a base altitude, base temperature, base pressure, and
+/// a lapse rate (which may be zero for isothermal layers).
+#[derive(Debug, Clone, Copy)]
+struct AtmosphereLayer {
+    /// Base altitude of the layer (m, geopotential).
+    base_altitude: f64,
+    /// Base temperature (K).
+    base_temperature: f64,
+    /// Base pressure (Pa).
+    base_pressure: f64,
+    /// Lapse rate (K/m). Positive = temperature increases with altitude.
+    lapse_rate: f64,
+}
+
+/// The US-1976 standard atmosphere, valid from sea level to 50 km
+/// (geopotential). Phase 3 uses this for HPR flights that reach the
+/// stratosphere; Phase 4 will extend to 86 km and add NRLMSISE-00 for
+/// T2 (Karman line).
+///
+/// The atmosphere is divided into layers with piecewise-constant lapse
+/// rates. Within each layer:
+/// - If `lapse_rate ≠ 0`: `T(h) = T_b + L·(h−h_b)`,
+///   `P(h) = P_b·(T_b/T)^(gM/(RL))`.
+/// - If `lapse_rate = 0` (isothermal): `T(h) = T_b`,
+///   `P(h) = P_b·exp(−gM(h−h_b)/(RT_b))`.
+#[derive(Debug, Clone, Copy)]
+pub struct Us1976 {
+    layers: [AtmosphereLayer; 5],
+}
+
+impl Default for Us1976 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Us1976 {
+    /// Create the standard US-1976 atmosphere.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            layers: [
+                // Troposphere: 0–11 km, L = -6.5 K/km.
+                // Base (sea level): T=288.15K, P=101325 Pa.
+                AtmosphereLayer {
+                    base_altitude: 0.0,
+                    base_temperature: 288.15,
+                    base_pressure: 101_325.0,
+                    lapse_rate: -0.0065,
+                },
+                // Tropopause (lower stratosphere): 11–20 km, isothermal.
+                // Base (11 km): T=216.65K, P=22632.0 Pa.
+                AtmosphereLayer {
+                    base_altitude: 11_000.0,
+                    base_temperature: 216.65,
+                    base_pressure: 22_632.0,
+                    lapse_rate: 0.0,
+                },
+                // Mid stratosphere: 20–32 km, L = +1.0 K/km.
+                // Base (20 km): T=216.65K, P=5529.3 Pa.
+                AtmosphereLayer {
+                    base_altitude: 20_000.0,
+                    base_temperature: 216.65,
+                    base_pressure: 5_529.3,
+                    lapse_rate: 0.001,
+                },
+                // Upper stratosphere: 32–47 km, L = +2.8 K/km.
+                // Base (32 km): T=228.65K, P=868.02 Pa.
+                AtmosphereLayer {
+                    base_altitude: 32_000.0,
+                    base_temperature: 228.65,
+                    base_pressure: 868.02,
+                    lapse_rate: 0.0028,
+                },
+                // Stratopause: 47–50 km, isothermal.
+                // Base (47 km): T=270.65K, P=110.91 Pa.
+                AtmosphereLayer {
+                    base_altitude: 47_000.0,
+                    base_temperature: 270.65,
+                    base_pressure: 110.91,
+                    lapse_rate: 0.0,
+                },
+            ],
+        }
+    }
+
+    /// Compute the atmosphere state at the given altitude.
+    ///
+    /// Altitudes below sea level are handled by the tropospheric formula
+    /// (extrapolated). Altitudes above 50 km (stratopause) are clamped
+    /// to 50 km; Phase 4 will extend this to 86 km and beyond via
+    /// NRLMSISE-00.
+    #[must_use]
+    pub fn at(&self, altitude: Length) -> AtmosphereState {
+        let h = altitude.as_meters().clamp(-1_000.0, 50_000.0);
+
+        // Find the layer containing this altitude.
+        let layer_idx = self
+            .layers
+            .iter()
+            .rposition(|l| h >= l.base_altitude)
+            .unwrap_or(0);
+        let layer = self.layers[layer_idx];
+
+        let h_above = h - layer.base_altitude;
+        let t = layer.base_temperature + layer.lapse_rate * h_above;
+
+        let p = if layer.lapse_rate.abs() < 1e-12 {
+            // Isothermal: P = P_b · exp(−gM(h−h_b)/(RT_b)).
+            layer.base_pressure * (-G * M_AIR * h_above / (R_UNIV * layer.base_temperature)).exp()
+        } else {
+            // Lapse ≠ 0: P = P_b · (T_b/T)^(gM/(RL)).
+            let exponent = G * M_AIR / (R_UNIV * layer.lapse_rate);
+            layer.base_pressure * (layer.base_temperature / t).powf(exponent)
+        };
+
+        let rho = p / (R_SPECIFIC * t);
+        let a = (GAMMA * R_SPECIFIC * t).sqrt();
+
+        AtmosphereState {
+            temperature: Temperature::kelvin(t),
+            pressure: Pressure::pascals(p),
+            density: Density::kilograms_per_cubic_meter(rho),
+            speed_of_sound: Velocity::meters_per_second(a),
+        }
+    }
+
+    /// Sea-level state (convenience for `at(0)`).
+    #[must_use]
+    pub fn sea_level(&self) -> AtmosphereState {
+        self.at(Length::ZERO)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::cast_precision_loss)]
@@ -181,6 +314,8 @@ mod tests {
     use rocket_core::Length;
 
     const TOL: f64 = 1e-3;
+
+    // ---- ISA (troposphere) regression tests ----
 
     #[test]
     fn sea_level_temperature_is_standard() {
@@ -370,5 +505,158 @@ mod tests {
         let nu = s.kinematic_viscosity();
         // Sea-level kinematic viscosity of air ≈ 1.460e-5 m²/s.
         assert!((nu - 1.460e-5).abs() < 5e-8, "nu(sea level) = {nu:e}");
+    }
+
+    // ---- US-1976 atmosphere tests ----
+
+    #[test]
+    fn us1976_sea_level_matches_isa() {
+        let isa = IsaAtmosphere::new();
+        let us = Us1976::new();
+        let s_isa = isa.sea_level();
+        let s_us = us.sea_level();
+        assert!((s_isa.temperature.as_kelvin() - s_us.temperature.as_kelvin()).abs() < TOL);
+        assert!((s_isa.pressure.as_pascals() - s_us.pressure.as_pascals()).abs() < 1.0);
+        assert!(
+            (s_isa.density.as_kilograms_per_cubic_meter()
+                - s_us.density.as_kilograms_per_cubic_meter())
+            .abs()
+                < 1e-4
+        );
+    }
+
+    #[test]
+    fn us1976_troposphere_matches_isa() {
+        // The US-1976 troposphere (0-11 km) should match ISA exactly.
+        let isa = IsaAtmosphere::new();
+        let us = Us1976::new();
+        for h_m in [0.0, 1000.0, 5000.0, 10_000.0, 11_000.0] {
+            let s_isa = isa.at(Length::meters(h_m));
+            let s_us = us.at(Length::meters(h_m));
+            assert!(
+                (s_isa.temperature.as_kelvin() - s_us.temperature.as_kelvin()).abs() < 1e-3,
+                "T({h_m}m): ISA={}, US={}",
+                s_isa.temperature.as_kelvin(),
+                s_us.temperature.as_kelvin()
+            );
+            assert!(
+                (s_isa.pressure.as_pascals() - s_us.pressure.as_pascals()).abs()
+                    / s_isa.pressure.as_pascals()
+                    < 1e-3,
+                "P({h_m}m): ISA={}, US={}",
+                s_isa.pressure.as_pascals(),
+                s_us.pressure.as_pascals()
+            );
+        }
+    }
+
+    #[test]
+    fn us1976_tropopause_is_isothermal() {
+        // At 11-20 km, temperature should be constant at 216.65 K.
+        let us = Us1976::new();
+        let s_11 = us.at(Length::meters(11_000.0));
+        let s_15 = us.at(Length::meters(15_000.0));
+        let s_20 = us.at(Length::meters(20_000.0));
+        assert!((s_11.temperature.as_kelvin() - 216.65).abs() < TOL);
+        assert!((s_15.temperature.as_kelvin() - 216.65).abs() < TOL);
+        assert!((s_20.temperature.as_kelvin() - 216.65).abs() < TOL);
+    }
+
+    #[test]
+    fn us1976_density_at_20km_matches_table() {
+        let us = Us1976::new();
+        let s = us.at(Length::meters(20_000.0));
+        // US-1976 table: ρ(20km) = 0.0889 kg/m³.
+        assert!(
+            (s.density.as_kilograms_per_cubic_meter() - 0.0889).abs() < 1e-3,
+            "rho(20km) = {}",
+            s.density.as_kilograms_per_cubic_meter()
+        );
+    }
+
+    #[test]
+    fn us1976_temperature_at_32km() {
+        // 20-32 km: L = +1.0 K/km. T(32km) = 216.65 + 12 = 228.65 K.
+        let us = Us1976::new();
+        let s = us.at(Length::meters(32_000.0));
+        assert!(
+            (s.temperature.as_kelvin() - 228.65).abs() < TOL,
+            "T(32km) = {}",
+            s.temperature.as_kelvin()
+        );
+    }
+
+    #[test]
+    fn us1976_density_at_32km_matches_table() {
+        let us = Us1976::new();
+        let s = us.at(Length::meters(32_000.0));
+        // US-1976 table: ρ(32km) = 0.0132 kg/m³.
+        assert!(
+            (s.density.as_kilograms_per_cubic_meter() - 0.0132).abs() < 5e-4,
+            "rho(32km) = {}",
+            s.density.as_kilograms_per_cubic_meter()
+        );
+    }
+
+    #[test]
+    fn us1976_stratopause_temperature() {
+        // 32-47 km: L = +2.8 K/km. T(47km) = 228.65 + 15*2.8 = 270.65 K.
+        let us = Us1976::new();
+        let s = us.at(Length::meters(47_000.0));
+        assert!(
+            (s.temperature.as_kelvin() - 270.65).abs() < TOL,
+            "T(47km) = {}",
+            s.temperature.as_kelvin()
+        );
+    }
+
+    #[test]
+    fn us1976_density_at_50km_matches_table() {
+        let us = Us1976::new();
+        let s = us.at(Length::meters(50_000.0));
+        // US-1976 table: ρ(50km) ≈ 0.00103 kg/m³.
+        assert!(
+            (s.density.as_kilograms_per_cubic_meter() - 0.00103).abs() < 2e-4,
+            "rho(50km) = {}",
+            s.density.as_kilograms_per_cubic_meter()
+        );
+    }
+
+    #[test]
+    fn us1976_pressure_at_20km_matches_table() {
+        let us = Us1976::new();
+        let s = us.at(Length::meters(20_000.0));
+        // US-1976 table: P(20km) = 5529.3 Pa.
+        assert!(
+            (s.pressure.as_pascals() - 5_529.3).abs() < 50.0,
+            "P(20km) = {}",
+            s.pressure.as_pascals()
+        );
+    }
+
+    #[test]
+    fn us1976_density_monotonic_decreasing_to_50km() {
+        let us = Us1976::new();
+        let mut prev = us.sea_level().density.as_kilograms_per_cubic_meter();
+        for h_m in [
+            1000.0, 5000.0, 11_000.0, 15_000.0, 20_000.0, 25_000.0, 32_000.0, 40_000.0, 47_000.0,
+            50_000.0,
+        ] {
+            let s = us.at(Length::meters(h_m));
+            let rho = s.density.as_kilograms_per_cubic_meter();
+            assert!(
+                rho < prev,
+                "density should decrease: h={h_m}m, rho={rho}, prev={prev}"
+            );
+            prev = rho;
+        }
+    }
+
+    #[test]
+    fn us1976_altitude_above_50km_is_clamped() {
+        let us = Us1976::new();
+        let s50 = us.at(Length::meters(50_000.0));
+        let s70 = us.at(Length::meters(70_000.0));
+        assert_eq!(s50, s70);
     }
 }

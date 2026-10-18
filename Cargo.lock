@@ -3566,6 +3566,7 @@ name = "rocket-physics"
 version = "0.1.0"
 dependencies = [
  "rocket-core",
+ "serde",
 ]
 
 [[package]]
