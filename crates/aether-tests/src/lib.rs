@@ -15,6 +15,7 @@
 mod estes_alpha;
 mod fixtures;
 mod flight_sim;
+mod phase3_validation;
 
 mod aero;
 mod dynamics;
