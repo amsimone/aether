@@ -4,11 +4,17 @@
 //! adaptive Dormand-Prince RK45 planned for ADR-0003, and accurate
 //! enough for the 5% apogee gate. Phase 3 will switch to adaptive
 //! step size with event localization.
+//!
+//! Two integrators are provided:
+//! - [`rk4_step`] for the 9-dim 3-DOF state (Phase 2).
+//! - [`rk4_step_6dof`] for the 13-dim 6-DOF state (Phase 3).
 
 use crate::state::SimState;
+use crate::state6dof::SimState6Dof;
 use rocket_core::Duration;
+use rocket_physics::{Quaternion, Vec3};
 
-/// One RK4 step for the 3-DOF translational dynamics.
+/// One RK4 step for the 3-DOF translational dynamics (Phase 2).
 ///
 /// The derivative function `f` returns `((dx, dy, dz), (dvx, dvy, dvz), dmass)`
 /// — i.e. the time derivatives of position, velocity, and mass.
@@ -92,6 +98,109 @@ where
         position: new_pos,
         velocity: new_vel,
         mass: state.mass, // Mass is recomputed by the caller via update_mass.
+    }
+}
+
+/// One RK4 step for the 13-dim 6-DOF state (Phase 3).
+///
+/// The derivative function `f` returns:
+/// - `(dpos, dvel, dquat, domega)` where `dquat` is `(dw, dx, dy, dz)`.
+///
+/// Mass is recomputed by the caller after the step (derived, not
+/// integrated). The quaternion is renormalized by the caller after the
+/// step to prevent drift.
+pub fn rk4_step_6dof<F>(state: &SimState6Dof, dt: f64, f: F) -> SimState6Dof
+where
+    F: Fn(
+        &SimState6Dof,
+    ) -> (
+        (f64, f64, f64),
+        (f64, f64, f64),
+        (f64, f64, f64, f64),
+        (f64, f64, f64),
+    ),
+{
+    // k1
+    let (k1_p, k1_v, k1_q, k1_w) = f(state);
+
+    let s2 = SimState6Dof {
+        time: Duration::seconds(state.time.as_seconds() + dt / 2.0),
+        position: state.position + Vec3::from_tuple(k1_p) * (dt / 2.0),
+        velocity: state.velocity + Vec3::from_tuple(k1_v) * (dt / 2.0),
+        quaternion: Quaternion::new(
+            state.quaternion.w + dt / 2.0 * k1_q.0,
+            state.quaternion.x + dt / 2.0 * k1_q.1,
+            state.quaternion.y + dt / 2.0 * k1_q.2,
+            state.quaternion.z + dt / 2.0 * k1_q.3,
+        ),
+        angular_velocity: state.angular_velocity + Vec3::from_tuple(k1_w) * (dt / 2.0),
+        mass: state.mass,
+    };
+    let (k2_p, k2_v, k2_q, k2_w) = f(&s2);
+
+    let s3 = SimState6Dof {
+        time: Duration::seconds(state.time.as_seconds() + dt / 2.0),
+        position: state.position + Vec3::from_tuple(k2_p) * (dt / 2.0),
+        velocity: state.velocity + Vec3::from_tuple(k2_v) * (dt / 2.0),
+        quaternion: Quaternion::new(
+            state.quaternion.w + dt / 2.0 * k2_q.0,
+            state.quaternion.x + dt / 2.0 * k2_q.1,
+            state.quaternion.y + dt / 2.0 * k2_q.2,
+            state.quaternion.z + dt / 2.0 * k2_q.3,
+        ),
+        angular_velocity: state.angular_velocity + Vec3::from_tuple(k2_w) * (dt / 2.0),
+        mass: state.mass,
+    };
+    let (k3_p, k3_v, k3_q, k3_w) = f(&s3);
+
+    let s4 = SimState6Dof {
+        time: Duration::seconds(state.time.as_seconds() + dt),
+        position: state.position + Vec3::from_tuple(k3_p) * dt,
+        velocity: state.velocity + Vec3::from_tuple(k3_v) * dt,
+        quaternion: Quaternion::new(
+            state.quaternion.w + dt * k3_q.0,
+            state.quaternion.x + dt * k3_q.1,
+            state.quaternion.y + dt * k3_q.2,
+            state.quaternion.z + dt * k3_q.3,
+        ),
+        angular_velocity: state.angular_velocity + Vec3::from_tuple(k3_w) * dt,
+        mass: state.mass,
+    };
+    let (k4_p, k4_v, k4_q, k4_w) = f(&s4);
+
+    // Combine.
+    let new_pos = state.position
+        + Vec3::from_tuple((
+            k1_p.0 + 2.0 * k2_p.0 + 2.0 * k3_p.0 + k4_p.0,
+            k1_p.1 + 2.0 * k2_p.1 + 2.0 * k3_p.1 + k4_p.1,
+            k1_p.2 + 2.0 * k2_p.2 + 2.0 * k3_p.2 + k4_p.2,
+        )) * (dt / 6.0);
+    let new_vel = state.velocity
+        + Vec3::from_tuple((
+            k1_v.0 + 2.0 * k2_v.0 + 2.0 * k3_v.0 + k4_v.0,
+            k1_v.1 + 2.0 * k2_v.1 + 2.0 * k3_v.1 + k4_v.1,
+            k1_v.2 + 2.0 * k2_v.2 + 2.0 * k3_v.2 + k4_v.2,
+        )) * (dt / 6.0);
+    let new_q = Quaternion::new(
+        state.quaternion.w + dt / 6.0 * (k1_q.0 + 2.0 * k2_q.0 + 2.0 * k3_q.0 + k4_q.0),
+        state.quaternion.x + dt / 6.0 * (k1_q.1 + 2.0 * k2_q.1 + 2.0 * k3_q.1 + k4_q.1),
+        state.quaternion.y + dt / 6.0 * (k1_q.2 + 2.0 * k2_q.2 + 2.0 * k3_q.2 + k4_q.2),
+        state.quaternion.z + dt / 6.0 * (k1_q.3 + 2.0 * k2_q.3 + 2.0 * k3_q.3 + k4_q.3),
+    );
+    let new_w = state.angular_velocity
+        + Vec3::from_tuple((
+            k1_w.0 + 2.0 * k2_w.0 + 2.0 * k3_w.0 + k4_w.0,
+            k1_w.1 + 2.0 * k2_w.1 + 2.0 * k3_w.1 + k4_w.1,
+            k1_w.2 + 2.0 * k2_w.2 + 2.0 * k3_w.2 + k4_w.2,
+        )) * (dt / 6.0);
+
+    SimState6Dof {
+        time: Duration::seconds(state.time.as_seconds() + dt),
+        position: new_pos,
+        velocity: new_vel,
+        quaternion: new_q,
+        angular_velocity: new_w,
+        mass: state.mass,
     }
 }
 

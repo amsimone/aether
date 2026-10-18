@@ -25,9 +25,11 @@
 mod integrator;
 mod result;
 mod state;
+mod state6dof;
 
 pub use result::{SimResult, TelemetryPoint};
 pub use state::{SimConfig, SimState, Simulator, DEFAULT_TIME_STEP};
+pub use state6dof::{RecoveryState, SimState6Dof, Simulator6Dof};
 
 // Re-export the core types so consumers of rocket-sim don't need to
 // depend on rocket-core directly for common types.
