@@ -45,28 +45,20 @@ All met:
 
 ## Tasks
 
-### Task 1.1 — 3D library evaluation and ADR-0010 (2 days)
+### Task 1.1 — 3D library evaluation and ADR-0010 (DONE ✅)
 
 **Goal:** Decide between rend3, scena, and raw wgpu for the 3D viewport.
 
-**Research findings (pre-filled):**
+**Research findings:**
 
-- **rend3 0.3.0** (Sep 2026): pinned to **wgpu 0.12**, while current wgpu is **30.0.1**. This is a ~20-major-version gap. rend3 appears effectively unmaintained or stuck on an ancient wgpu. The `rend3-egui` integration crate would carry the same version skew. **Rejected** — incompatible with our wgpu 30 / egui-wgpu 0.37 stack.
-- **scena**: actively maintained (632 commits, recent release evidence), wgpu-native, MIT/Apache-2.0, with picking, cameras, glTF loading, headless rendering, and an explicit `prepare()`/`render()` lifecycle. Promising.
-- **Raw wgpu** (what the spike uses): most control, most code. Sufficient for a cube; insufficient for procedural rocket geometry without significant investment.
+- **rend3 0.3.0** (Sep 2026): pinned to **wgpu 0.12**, while current wgpu is **30.0.1**. ~20-major-version gap. Effectively unmaintained. **Rejected.**
+- **scena 1.10.6** (Oct 2026): depends on **wgpu ^29.0.3**, while egui-wgpu 0.37 depends on **wgpu 30.0.1**. Cargo resolves these as two separate wgpu major versions in the same dep tree (`wgpu@29.0.4` for scena, `wgpu@30.0.1` for egui). The two wgpu versions expose distinct, incompatible `Instance`/`Device`/`Queue` types — scena cannot share egui's wgpu device. **Rejected.**
+- **Raw wgpu** (what the Phase-0 spike uses): the only viable path. More code, but works.
 
-**Deliverables:**
-
-- [ ] A 1-day spike: build a minimal scena scene (a box) embedded in an egui panel, mirroring the Task 2 spike. If scena can share egui's wgpu device (or render to a texture egui can display), it's the winner.
-- [ ] If scena works: file **ADR-0010 ("scena for 3D rendering")**, deprecating the three-d references in ADR-0002 and plan §12.
-- [ ] If scena fails the spike: fall back to raw wgpu + a thin procedural-geometry layer (nose cone lathe, cylinder, fin instances). File ADR-0010 documenting the choice and the rationale.
-- [ ] Update plan §5 (technology stack) and §12 (3D rendering) to reflect the chosen library.
-
-**Acceptance criteria:**
-
-1. ADR-0010 is filed with a clear decision and rationale.
-2. A minimal 3D scene (box or cube) renders inside an egui panel using the chosen library.
-3. The chosen library's wgpu version is compatible with egui-wgpu 0.37 (wgpu 30.x).
+**Outcome:** ADR-0010 filed (`docs/adr/0010-raw-wgpu-for-3d-rendering.md`).
+Plan §12 updated to remove the `three-d` reference. Phase 1 proceeds
+with raw wgpu + a thin in-house procedural-geometry layer in
+`rocket-render`.
 
 ### Task 1.2 — Component data model in `rocket-core` (3 days)
 
