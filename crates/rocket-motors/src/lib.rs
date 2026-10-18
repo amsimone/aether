@@ -20,6 +20,18 @@
 
 pub mod rasp;
 
+#[cfg(feature = "api")]
+pub mod api;
+#[cfg(feature = "api")]
+pub mod cache;
+
+#[cfg(feature = "api")]
+pub use api::{
+    ApiError, DownloadResult, MotorMetadata, MotorSummary, SearchQuery, ThrustCurveClient,
+};
+#[cfg(feature = "api")]
+pub use cache::{Cache, CacheError};
+
 use rocket_core::{Duration, Force, Length, Mass};
 
 /// A parsed rocket motor with its thrust curve.

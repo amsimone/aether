@@ -7,14 +7,24 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = ["api"]
+api = ["dep:reqwest", "dep:tokio", "dep:base64", "dep:directories", "dep:time"]
+
 [dependencies]
 rocket-core = { path = "../rocket-core", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2.0"
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"], optional = true }
+base64 = { version = "0.22", optional = true }
+directories = { version = "5", optional = true }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"], optional = true }
 
 [dev-dependencies]
 proptest = "1.5"
+tempfile = "3"
 
 [lints]
 workspace = true

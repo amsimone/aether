@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
+rocket-motors = { path = "../rocket-motors", version = "0.1.0" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
