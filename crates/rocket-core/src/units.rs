@@ -119,6 +119,13 @@ quantity!(
 );
 
 quantity!(
+    /// A density in kilograms per cubic meter. Display: `kg/m³`.
+    Density,
+    "kg/m³",
+    "kilogram per cubic meter"
+);
+
+quantity!(
     /// A duration in seconds. Display: `s`.
     Duration,
     "s",
@@ -210,6 +217,26 @@ impl Pressure {
     #[must_use]
     pub const fn as_pascals(self) -> f64 {
         self.0
+    }
+}
+
+impl Density {
+    /// Create from kilograms per cubic meter.
+    #[must_use]
+    pub const fn kilograms_per_cubic_meter(kg_m3: f64) -> Self {
+        Self(kg_m3)
+    }
+
+    /// Return the value in kilograms per cubic meter.
+    #[must_use]
+    pub const fn as_kilograms_per_cubic_meter(self) -> f64 {
+        self.0
+    }
+
+    /// Return the value in grams per cubic centimeter.
+    #[must_use]
+    pub fn as_grams_per_cubic_centimeter(self) -> f64 {
+        self.0 / 1_000.0
     }
 }
 

@@ -11,8 +11,21 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod components;
+pub mod id;
+pub mod materials;
 pub mod rocket;
+pub mod stage;
 pub mod units;
 
-pub use rocket::Rocket;
-pub use units::{Duration, Force, Length, Mass, Pressure, Velocity};
+pub use components::{
+    Airfoil, Component, Coupler, FinPlanform, FinSet, LaunchLug, MassObject, MassObjectKind,
+    NoseCone, NoseShape, Pod, Transition,
+};
+pub use id::ComponentId;
+pub use materials::{Material, MaterialId, MaterialLibrary};
+pub use rocket::{MassProperties, Rocket};
+pub use stage::{
+    Event, EventAction, EventTrigger, MotorMount, RecoveryDevice, RecoveryKind, Stage,
+};
+pub use units::{Density, Duration, Force, Length, Mass, Pressure, Velocity};
