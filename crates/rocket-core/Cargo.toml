@@ -1,0 +1,15 @@
+[package]
+name = "rocket-core"
+description = "Core data model, units, and materials for the Aether rocket simulator."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

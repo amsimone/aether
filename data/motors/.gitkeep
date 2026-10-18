@@ -1,0 +1,5 @@
+# Placeholder — motor cache directory.
+#
+# Per ADR-0006, motor files are fetched on demand from the ThrustCurve.org
+# API and cached here. The directory itself is tracked; the motor files
+# inside it are gitignored (user-specific).

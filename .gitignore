@@ -1,0 +1,29 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Build artifacts
+dist/
+*.dmg
+*.msi
+*.deb
+*.rpm
+
+# Motor cache (user-specific, not tracked)
+/data/motors/*.eng
+/data/motors/*.rse
+/data/motors/*.meta.json

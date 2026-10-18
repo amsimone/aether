@@ -1,0 +1,7 @@
+edition = "2021"
+max_width = 100
+use_field_init_shorthand = true
+use_try_shorthand = true
+# These require nightly; uncomment in a nightly-only repo if desired:
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"

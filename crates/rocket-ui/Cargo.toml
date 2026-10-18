@@ -1,0 +1,15 @@
+[package]
+name = "rocket-ui"
+description = "Aether GUI: egui-based design editor, sim control, plots, and 3D playback."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aether-ui"
+path = "src/main.rs"
+
+[lints]
+workspace = true

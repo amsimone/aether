@@ -1,0 +1,16 @@
+[package]
+name = "rocket-motors"
+description = "Motor thrust-curve parsing (ENG/RASP), ThrustCurve.org API client, and cache."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+rocket-core = { path = "../rocket-core", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

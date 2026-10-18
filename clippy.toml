@@ -1,0 +1,5 @@
+# Clippy configuration for the Aether workspace.
+# See: https://rust-lang.github.io/rust-clippy/master/index.html
+
+# Don't warn about types that are large inCopy - we use f64-based newtypes by design.
+arithmetic-side-effects-allowed = ["f64"]
