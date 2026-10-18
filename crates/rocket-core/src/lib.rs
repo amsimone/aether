@@ -19,8 +19,8 @@ pub mod stage;
 pub mod units;
 
 pub use components::{
-    Airfoil, Component, Coupler, FinPlanform, FinSet, LaunchLug, MassObject, MassObjectKind,
-    NoseCone, NoseShape, Pod, Transition,
+    Airfoil, BodyTube, Component, Coupler, FinPlanform, FinSet, LaunchLug, MassObject,
+    MassObjectKind, NoseCone, NoseShape, Pod, Transition,
 };
 pub use id::ComponentId;
 pub use materials::{Material, MaterialId, MaterialLibrary};

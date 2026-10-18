@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 eframe = "0.37"
+rocket-core = { path = "../rocket-core", version = "0.1.0" }
+rocket-render = { path = "../rocket-render", version = "0.1.0" }
 bytemuck = { version = "1", features = ["derive"] }
 
 [lints]

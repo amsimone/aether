@@ -3428,6 +3428,8 @@ version = "0.1.0"
 name = "rocket-render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "eframe",
  "rocket-core",
 ]
 
@@ -3444,6 +3446,8 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "eframe",
+ "rocket-core",
+ "rocket-render",
 ]
 
 [[package]]
