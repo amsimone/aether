@@ -18,12 +18,14 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod rasp;
+
 use rocket_core::{Duration, Force, Length, Mass};
 
 /// A parsed rocket motor with its thrust curve.
 ///
-/// This struct is populated by the RASP/`.eng` parser (Phase-0 Task 3)
-/// and the `ThrustCurve` API client (Phase-0 Task 4).
+/// Populated by the RASP/`.eng` parser ([`rasp::parse`]) and (in Task 4)
+/// the `ThrustCurve` API client.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Motor {
     /// Motor designation (e.g., "A8-3", "H128W").
@@ -37,7 +39,9 @@ pub struct Motor {
     pub diameter: Length,
     /// Motor casing length.
     pub length: Length,
-    /// Ejection charge delays (seconds). `-1` means plugged / no delay.
+    /// Ejection charge delays (seconds).
+    /// `-1.0` means plugged (no ejection charge).
+    /// `0.0` means no delay (ejection charge fires immediately).
     #[serde(default)]
     pub delays: Vec<f32>,
     /// Propellant mass.
@@ -47,3 +51,5 @@ pub struct Motor {
     /// Thrust curve as `(time, thrust)` pairs.
     pub thrust_curve: Vec<(Duration, Force)>,
 }
+
+pub use rasp::ParseError;
