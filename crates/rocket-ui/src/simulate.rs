@@ -1,15 +1,19 @@
 //! The simulate panel: motor selection, sim config, run button, results.
+//!
+//! Phase 3: uses the 6-DOF simulator with quaternion attitude, recovery
+//! events, and full aero coefficients.
 
 #![allow(
     clippy::cast_precision_loss,
     clippy::similar_names,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
 )]
 
 use eframe::egui;
 use rocket_core::Length;
 use rocket_motors::Motor;
-use rocket_sim::{SimConfig, SimResult, Simulator};
+use rocket_sim::{RecoveryState, SimConfig, SimResult, Simulator6Dof};
 
 use crate::app::AetherApp;
 use crate::plots;
@@ -19,7 +23,6 @@ use crate::plots;
 const BUILTIN_MOTORS: &[&str] = &["estes_a8_3.eng", "estes_b6.eng", "estes_c6.eng"];
 
 /// The sim panel state, stored in [`AetherApp`].
-#[derive(Default)]
 pub struct SimPanelState {
     /// Index of the selected motor in the available list.
     pub selected_motor: usize,
@@ -33,10 +36,38 @@ pub struct SimPanelState {
     pub wind_speed: f64,
     /// Wind direction in degrees (0 = downrange, 90 = cross-range).
     pub wind_dir_deg: f64,
+    /// Main chute deployment altitude (m AGL).
+    pub main_altitude_m: f64,
+    /// Main chute drag area (Cd · A, m²).
+    pub main_cd_a: f64,
+    /// Drogue chute drag area (Cd · A, m²).
+    pub drogue_cd_a: f64,
     /// The last simulation result (if any).
     pub result: Option<SimResult>,
     /// Whether a sim is currently running.
     pub running: bool,
+    /// Playback time slider position (seconds).
+    pub playback_time: f64,
+}
+
+impl Default for SimPanelState {
+    fn default() -> Self {
+        let recovery = RecoveryState::default_lpr();
+        Self {
+            selected_motor: 0,
+            available_motors: Vec::new(),
+            launch_angle_deg: 0.0,
+            pad_altitude_m: 0.0,
+            wind_speed: 0.0,
+            wind_dir_deg: 0.0,
+            main_altitude_m: recovery.main_altitude,
+            main_cd_a: recovery.main_cd_a,
+            drogue_cd_a: recovery.drogue_cd_a,
+            result: None,
+            running: false,
+            playback_time: 0.0,
+        }
+    }
 }
 
 impl SimPanelState {
@@ -82,6 +113,16 @@ impl SimPanelState {
                 0.0,
             ),
             ..SimConfig::default()
+        }
+    }
+
+    /// Build a [`RecoveryState`] from the panel state.
+    fn build_recovery(&self) -> RecoveryState {
+        RecoveryState {
+            main_altitude: self.main_altitude_m,
+            main_cd_a: self.main_cd_a,
+            drogue_cd_a: self.drogue_cd_a,
+            ..RecoveryState::default_lpr()
         }
     }
 }
@@ -157,6 +198,27 @@ pub fn show_simulate_panel(app: &mut AetherApp, ui: &mut egui::Ui) {
     });
     ui.add_space(8.0);
 
+    // ---- Recovery config ----
+    ui.collapsing("🪂 Recovery", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Main deploy altitude:");
+            ui.add(
+                egui::Slider::new(&mut sim_state.main_altitude_m, 10.0..=500.0)
+                    .suffix(" m")
+                    .fixed_decimals(0),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Main chute Cd·A:");
+            ui.add(egui::Slider::new(&mut sim_state.main_cd_a, 0.1..=5.0).fixed_decimals(2));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Drogue Cd·A:");
+            ui.add(egui::Slider::new(&mut sim_state.drogue_cd_a, 0.01..=1.0).fixed_decimals(2));
+        });
+    });
+    ui.add_space(8.0);
+
     // ---- Run button ----
     // Collect what we need before the mutable borrow of sim_panel ends.
     let run_clicked = !sim_state.available_motors.is_empty()
@@ -176,10 +238,42 @@ pub fn show_simulate_panel(app: &mut AetherApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     // ---- Results ----
-    let sim_state = &app.sim_panel;
-    if let Some(result) = &sim_state.result {
+    // Clone what we need to avoid holding a borrow of app.sim_panel.
+    let result_opt = app.sim_panel.result.clone();
+    if let Some(result) = &result_opt {
         show_results(ui, result);
         ui.add_space(8.0);
+
+        // ---- Playback slider ----
+        let max_t = result.landing_time.as_seconds();
+        if max_t > 0.0 {
+            let mut playback = app.sim_panel.playback_time;
+            ui.horizontal(|ui| {
+                ui.label("Playback:");
+                ui.add(
+                    egui::Slider::new(&mut playback, 0.0..=max_t)
+                        .suffix(" s")
+                        .fixed_decimals(2),
+                );
+            });
+            app.sim_panel.playback_time = playback;
+
+            // Show the telemetry at the playback time.
+            if let Some(tp) = result.telemetry_at(rocket_core::Duration::seconds(playback)) {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "t={:.2}s  z={:.1}m  v={:.1}m/s  T={:.1}N",
+                        tp.time.as_seconds(),
+                        tp.position.2,
+                        (tp.velocity.0.powi(2) + tp.velocity.1.powi(2) + tp.velocity.2.powi(2))
+                            .sqrt(),
+                        tp.thrust.as_newtons()
+                    ));
+                });
+            }
+        }
+
+        ui.add_space(4.0);
         ui.separator();
         ui.add_space(4.0);
 
@@ -201,12 +295,14 @@ fn run_simulation(app: &mut AetherApp) {
         None => return,
     };
     let config = sim_state.build_config();
+    let recovery = sim_state.build_recovery();
 
     sim_state.running = true;
-    let sim = Simulator::new(app.rocket.clone(), motor, config);
+    let sim = Simulator6Dof::new(app.rocket.clone(), motor, config).with_recovery(recovery);
     let result = sim.run();
     sim_state.running = false;
     sim_state.result = Some(result);
+    sim_state.playback_time = 0.0;
 }
 
 /// Show the simulation results summary.
