@@ -3596,7 +3596,9 @@ dependencies = [
  "rocket-aero",
  "rocket-core",
  "rocket-io",
+ "rocket-motors",
  "rocket-render",
+ "rocket-sim",
 ]
 
 [[package]]

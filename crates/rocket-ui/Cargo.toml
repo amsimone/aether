@@ -19,6 +19,8 @@ rocket-core = { path = "../rocket-core", version = "0.1.0" }
 rocket-aero = { path = "../rocket-aero", version = "0.1.0" }
 rocket-io = { path = "../rocket-io", version = "0.1.0" }
 rocket-render = { path = "../rocket-render", version = "0.1.0" }
+rocket-sim = { path = "../rocket-sim", version = "0.1.0" }
+rocket-motors = { path = "../rocket-motors", version = "0.1.0" }
 bytemuck = { version = "1", features = ["derive"] }
 
 [lints]

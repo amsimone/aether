@@ -2,11 +2,14 @@
 //!
 //! The Aether graphical application. Phase 1: design editor with a 3D
 //! viewport showing the rocket, a component tree, and a properties panel.
+//! Phase 2: flight simulation with trajectory plots.
 //!
 //! Run with: `cargo run -p rocket-ui`
 
 mod app;
+mod plots;
 mod properties;
+mod simulate;
 mod stability_gauge;
 mod tree;
 

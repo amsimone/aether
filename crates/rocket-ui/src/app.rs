@@ -34,8 +34,16 @@ use rocket_io::{load_from_json, save_to_json};
 use rocket_render::RocketViewport;
 
 use crate::properties::show_properties;
+use crate::simulate::SimPanelState;
 use crate::stability_gauge::show_stability_gauge;
 use crate::tree::show_component_tree;
+
+/// Which right-panel tab is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightPanelTab {
+    Design,
+    Simulate,
+}
 
 /// The main Aether eframe app.
 pub struct AetherApp {
@@ -53,6 +61,10 @@ pub struct AetherApp {
     dirty: bool,
     /// Pending file dialog operation (processed in `logic`).
     file_dialog: Option<FileDialog>,
+    /// The simulation panel state (motor selector, config, results).
+    pub sim_panel: SimPanelState,
+    /// Which right-panel tab is active.
+    right_tab: RightPanelTab,
 }
 
 /// Pending file dialog operation (processed in `logic`).
@@ -82,6 +94,8 @@ impl AetherApp {
             file_path: None,
             dirty: false,
             file_dialog: None,
+            sim_panel: SimPanelState::default(),
+            right_tab: RightPanelTab::Design,
         };
 
         // Add a default nose cone + body tube so the viewport isn't empty.
@@ -188,17 +202,33 @@ impl eframe::App for AetherApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.show_menu_bar(ui, frame);
 
-        // Right panel: component tree + properties + stability gauge.
+        // Right panel: tabbed Design / Simulate views.
         egui::Panel::right("right_panel")
             .resizable(true)
-            .default_size(320.0)
+            .default_size(340.0)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    show_component_tree(self, ui);
-                    ui.separator();
-                    show_properties(self, ui);
-                    ui.separator();
-                    show_stability_gauge(self, ui);
+                // Tab bar.
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.right_tab, RightPanelTab::Design, "🔧 Design");
+                    ui.selectable_value(
+                        &mut self.right_tab,
+                        RightPanelTab::Simulate,
+                        "🚀 Simulate",
+                    );
+                });
+                ui.separator();
+
+                egui::ScrollArea::vertical().show(ui, |ui| match self.right_tab {
+                    RightPanelTab::Design => {
+                        show_component_tree(self, ui);
+                        ui.separator();
+                        show_properties(self, ui);
+                        ui.separator();
+                        show_stability_gauge(self, ui);
+                    }
+                    RightPanelTab::Simulate => {
+                        crate::simulate::show_simulate_panel(self, ui);
+                    }
                 });
             });
 
@@ -277,7 +307,7 @@ impl AetherApp {
             ui.menu_button("Help", |ui| {
                 ui.label("Aether — Rocket Simulator");
                 ui.label(format!("Version: {}", env!("CARGO_PKG_VERSION")));
-                ui.label("Phase 1: Design Editor");
+                ui.label("Phase 2: Design Editor + Flight Sim");
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
