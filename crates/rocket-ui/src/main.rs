@@ -6,6 +6,9 @@
 //! Run with: `cargo run -p rocket-ui`
 
 mod app;
+mod properties;
+mod stability_gauge;
+mod tree;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {

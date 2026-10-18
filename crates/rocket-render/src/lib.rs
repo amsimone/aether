@@ -261,6 +261,8 @@ pub struct RocketViewport {
     initialized: bool,
     /// Hash of the last mesh, for dirty-flag detection.
     mesh_hash: u64,
+    /// Stored render state (device + queue + format), captured on first init.
+    render_state: Option<eframe::egui_wgpu::RenderState>,
 }
 
 impl Default for RocketViewport {
@@ -269,6 +271,7 @@ impl Default for RocketViewport {
             camera: OrbitCamera::default(),
             initialized: false,
             mesh_hash: 0,
+            render_state: None,
         }
     }
 }
@@ -278,21 +281,35 @@ impl RocketViewport {
     ///
     /// Call this every frame; it only rebuilds the mesh + GPU buffers
     /// when the rocket's geometry has actually changed (dirty flag).
+    /// On the first call, it captures the render state for later use.
     pub fn update_mesh(&mut self, rocket: &rocket_core::Rocket, cc: &eframe::CreationContext<'_>) {
+        if self.render_state.is_none() {
+            if let Some(rs) = &cc.wgpu_render_state {
+                self.render_state = Some(rs.clone());
+            }
+        }
+        self.rebuild_if_changed(rocket);
+    }
+
+    /// Rebuild the mesh if the rocket has changed, using the stored
+    /// render state. Returns `true` if the mesh was rebuilt.
+    ///
+    /// Call this every frame after the initial `update_mesh` to keep
+    /// the 3D view in sync with design edits.
+    pub fn rebuild_if_changed(&mut self, rocket: &rocket_core::Rocket) -> bool {
         let new_hash = hash_rocket(rocket);
         if new_hash == self.mesh_hash && self.initialized {
-            return; // No change.
+            return false;
         }
 
-        let Some(render_state) = cc.wgpu_render_state.as_ref() else {
-            return;
+        let Some(render_state) = &self.render_state else {
+            return false;
         };
 
         let mesh = build_mesh(rocket);
         let resources =
             RenderResources::new(&render_state.device, render_state.target_format, &mesh);
 
-        // Replace any existing resources.
         render_state
             .renderer
             .write()
@@ -300,6 +317,12 @@ impl RocketViewport {
             .insert(resources);
         self.initialized = true;
         self.mesh_hash = new_hash;
+        true
+    }
+
+    /// Force a mesh rebuild on the next `rebuild_if_changed` call.
+    pub fn mark_dirty(&mut self) {
+        self.mesh_hash = 0;
     }
 
     /// Draw the 3D viewport into the given egui Ui.
