@@ -143,7 +143,6 @@ impl AetherApp {
 impl eframe::App for AetherApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Rebuild the 3D mesh if the rocket has changed.
-        // This uses the stored render state (captured during update_mesh).
         self.viewport.rebuild_if_changed(&self.rocket);
 
         // Handle pending file dialogs.
@@ -151,8 +150,39 @@ impl eframe::App for AetherApp {
             self.handle_file_dialog(dialog);
         }
 
-        // Request repaint if there are unsaved changes or active editing.
-        let _ = ctx;
+        // Keyboard shortcuts.
+        ctx.input(|i| {
+            // Ctrl+S: Save (or Save As if no path).
+            if i.key_pressed(egui::Key::S) && (i.modifiers.ctrl || i.modifiers.command) {
+                if self.file_path.is_some() {
+                    self.file_dialog = Some(FileDialog::Save);
+                } else {
+                    self.file_dialog = Some(FileDialog::SaveAs);
+                }
+            }
+            // Ctrl+N: New.
+            if i.key_pressed(egui::Key::N) && (i.modifiers.ctrl || i.modifiers.command) {
+                self.rocket = Rocket::new("Untitled Rocket");
+                self.selected = None;
+                self.file_path = None;
+                self.dirty = false;
+                self.mark_dirty();
+            }
+            // Ctrl+O: Open.
+            if i.key_pressed(egui::Key::O) && (i.modifiers.ctrl || i.modifiers.command) {
+                self.file_dialog = Some(FileDialog::Open);
+            }
+            // Delete or Backspace: delete selected component.
+            if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                && self.selected.is_some()
+            {
+                self.delete_selected();
+            }
+            // Ctrl+D: Duplicate selected.
+            if i.key_pressed(egui::Key::D) && (i.modifiers.ctrl || i.modifiers.command) {
+                self.duplicate_selected();
+            }
+        });
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

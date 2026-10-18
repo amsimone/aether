@@ -301,12 +301,14 @@ fn edit_length_field(
     let prev = value.as_millimeters();
     let mut mm = prev;
     ui.horizontal(|ui| {
-        ui.label(format!("{label}:"));
+        ui.label(format!("{label}:"))
+            .on_hover_text(format!("Range: {min_mm:.1}–{max_mm:.1} mm"));
         ui.add(
             egui::Slider::new(&mut mm, min_mm..=max_mm)
                 .suffix(" mm")
                 .fixed_decimals(1),
-        );
+        )
+        .on_hover_text("Drag to adjust, or click to type a value");
     });
     if (mm - prev).abs() > 0.01 {
         *value = Length::millimeters(mm);

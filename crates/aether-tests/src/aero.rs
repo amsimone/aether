@@ -2,7 +2,7 @@
 //!
 //! These tests are `#[ignore]` until the aero module is implemented.
 
-#![allow(unused_imports)]
+#![allow(unused_imports, dead_code)]
 
 use crate::fixtures;
 

@@ -4,12 +4,14 @@
 //! `tests/validation/README.md`. Most are `#[ignore]` until the physics
 //! code they test is implemented; they form the to-do list for Phases 2–4.
 //!
-//! The motor fixture tests (not ignored) run now and verify the RASP
-//! parser against real `.eng` files.
+//! The motor fixture tests and the Estes Alpha integration test (not
+//! ignored) run now and verify the data model, mass properties, and
+//! aero estimate work correctly together on real rocket data.
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+mod estes_alpha;
 mod fixtures;
 
 mod aero;

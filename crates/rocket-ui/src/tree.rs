@@ -79,11 +79,29 @@ pub fn show_component_tree(app: &mut AetherApp, ui: &mut egui::Ui) {
     let mut new_selection = None;
     for (id, kind, detail) in &summaries {
         let selected = app.selected == Some(*id);
-        let response =
-            ui.selectable_label(selected, egui::RichText::new(format!("{kind} — {detail}")));
+        let response = ui
+            .selectable_label(selected, egui::RichText::new(format!("{kind} — {detail}")))
+            .on_hover_text(format!(
+                "Click to select · Right-click for actions\nID: {id}"
+            ));
         if response.clicked() {
             new_selection = Some(*id);
         }
+        response.context_menu(|ui| {
+            if ui.button("Duplicate").clicked() {
+                app.selected = Some(*id);
+                app.duplicate_selected();
+                ui.close();
+            }
+            if ui
+                .add(egui::Button::new("Delete").fill(egui::Color32::from_rgb(0x80, 0x20, 0x20)))
+                .clicked()
+            {
+                app.selected = Some(*id);
+                app.delete_selected();
+                ui.close();
+            }
+        });
     }
 
     if let Some(id) = new_selection {
