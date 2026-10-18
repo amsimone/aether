@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-10-18
 
+**Extension:** [ADR-0011](0011-shared-model-and-execution-targets.md) and the [model to flight plan](../../rocket-simulator-model-to-flight-plan.md) update this decision's scope. DOPRI5 remains a planned offline integration path; the production loop currently uses RK4. A sampled controller/HIL schedule is a separate contract with explicit ticks and sample/hold ordering. GPU and real-time numerical profiles require convergence checks against the CPU reference.
+
 ## Context
 
 The flight loop integrates a 12-dimensional state (position, velocity, unit quaternion, angular velocity) through events: motor burn, coast, staging, parachute deployment, ground impact. The integrator choice determines:

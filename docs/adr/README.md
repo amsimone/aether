@@ -39,6 +39,7 @@ We follow the Michael Nygard ADR template:
 | 0008 | Local-only files for v1, format designed for future sync | Accepted | 2026-10-18 |
 | 0009 | Rhai scripting for v1.x hooks; no native FFI plugins | Accepted | 2026-10-18 |
 | 0010 | Raw wgpu for 3D rendering (rend3 and scena rejected) | Accepted | 2026-10-18 |
+| 0011 | [Shared model and execution targets](0011-shared-model-and-execution-targets.md) | Accepted for direction; backend selection gated | 2026-10-18 |
 
 ## Superseded ADRs
 

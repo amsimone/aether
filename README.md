@@ -1,9 +1,15 @@
 # Aether
 
-A professional, tiered rocket design and 6-DOF flight simulator. Native Rust
-core with an egui UI and a wgpu 3D viewport. Targets model rockets
-through amateur/sounding vehicles, with physics fidelity that scales from
-subsonic Barrowman to supersonic compressible aerodynamics.
+Aether is being built as an open engineering workbench connecting vehicle and
+controller models to simulation, generated controller code, hardware-in-the-loop
+tests, and flight-data reconciliation. The production workspace is Rust with
+an egui UI and a wgpu 3D viewport.
+
+The [engineering plan](rocket-simulator-plan.md) and
+[model to flight execution plan](rocket-simulator-model-to-flight-plan.md)
+define that direction: declarative models, automatic linearization, CPU/GPU
+Monte Carlo, controller C generation, HIL, and telemetry replay. These new
+capabilities are planned; the status below describes the current application.
 
 ## Status
 
@@ -60,7 +66,7 @@ accuracy certificate. See [setup, contracts, and limits](docs/development-status
 
 See the planning documents for the full architecture and roadmap:
 
-- `docs/adr/` — Architecture Decision Records (0001–0009)
+- `docs/adr/` — Architecture Decision Records (0001–0011)
 - Plan, technical specs, and Phase-0 spike: see the project documentation.
 
 ## Building

@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-10-18
 
+**Extension:** [ADR-0011](0011-shared-model-and-execution-targets.md) and the [model to flight plan](../../rocket-simulator-model-to-flight-plan.md) update this decision's scope. Rhai remains optional orchestration tooling. Portable controller semantics belong to the restricted typed graph and generated C path. Generated controller source and separately hosted C ABI/FMI adapters are distinct from arbitrary in-process native plugins; the plugin restriction remains.
+
 ## Context
 
 Aether's built-in event system (plan §7.6) covers the common cases: time-based ignition, apogee deployment, altitude-based deployment, burnout detection, staging. But power users will inevitably want custom logic that the built-in events can't anticipate:
@@ -108,9 +110,9 @@ The Rust API remains the power-user path; Rhai is the accessibility path.
 
 ## References
 
-- Plan: `rocket-simulator-plan.md` §18 Q7.
+- Plan: `rocket-simulator-plan.md` §18 and the model-to-flight extension above.
 - Rhai: https://rhai.rs/
 - `mlua` (Lua bindings for Rust): https://crates.io/crates/mlua
 - PyO3 (Python bindings for Rust): https://pyo3.rs/
 - `wasmtime` (WASM runtime): https://wasmtime.rs/
-- MC/optimization spec: `rocket-simulator-mc-optimization.md` §14.1 (custom objective via Rhai).
+- [Model-to-flight execution contracts](../../rocket-simulator-model-to-flight-plan.md) (generated controllers and host orchestration).

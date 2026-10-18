@@ -1,6 +1,12 @@
 # Phase 3 — Full 6-DOF + Extended Aero — Plan & Task List
 
-**Status:** Ready for execution
+> **Current direction:** The [engineering plan](rocket-simulator-plan.md) and
+> [model to flight execution plan](rocket-simulator-model-to-flight-plan.md)
+> supersede this document's priority order, estimates and release sequence.
+> Retain these tasks as technical history; phase completion does not establish
+> the current validation or model-to-flight gates.
+
+**Status:** Historical phase task inventory; current sequencing is M0–M5
 **Estimated duration:** 7 weeks (one focused engineer)
 **Goal:** Replace the point-mass Phase 2 sim with a full 6-DOF rigid-body sim with quaternion attitude, Euler-equation rotational dynamics, extended-Barrowman aero (subsonic + compressibility), US-1976 atmosphere, wind gradient, and recovery events. Validate against RASAero and a real HPR flight.
 

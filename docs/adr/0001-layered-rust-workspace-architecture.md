@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-10-18
 
+**Extension:** [ADR-0011](0011-shared-model-and-execution-targets.md) and the [model to flight plan](../../rocket-simulator-model-to-flight-plan.md) update this decision's scope. The shared model/IR and CPU, analysis, codegen, GPU, HIL and replay boundaries extend the layering here. The former fixed performance budget and hobby-first tier order are replaced by measured backend gates. Rust remains the production workspace; Julia is evaluated as optional analysis/build tooling.
+
 ## Context
 
 Aether targets a wide fidelity range — model rockets to amateur/sounding — and a wide user range — hobbyists running one sim to engineers running 10,000-run Monte Carlo batches. The architecture must serve both without making either feel compromised.

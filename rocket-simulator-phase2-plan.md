@@ -1,6 +1,12 @@
 # Phase 2 — Basic Flight Simulator — Plan & Task List
 
-**Status:** Ready for execution
+> **Current direction:** The [engineering plan](rocket-simulator-plan.md) and
+> [model to flight execution plan](rocket-simulator-model-to-flight-plan.md)
+> supersede this document's priority order, estimates and release sequence.
+> Retain these tasks as technical history; phase completion does not establish
+> the current validation or model-to-flight gates.
+
+**Status:** Historical phase task inventory; current sequencing is M0–M5
 **Estimated duration:** 3 weeks (one focused engineer)
 **Goal:** A user can run a flight simulation of their rocket design and see the trajectory (altitude, velocity, thrust) plotted in real time, with apogee/landing readouts.
 

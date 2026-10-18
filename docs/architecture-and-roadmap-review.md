@@ -4,7 +4,7 @@
 
 **Scope:** Current working tree, including the UI improvements, against the master plan, phase plans, ADRs, and publicly documented competing tools.
 
-**Status:** Proposed direction for gradual development. Findings below record the initial inspection. Implemented follow-ups are tracked in the [development status](development-status.md); existing plans and ADRs remain unchanged.
+**Status:** Proposed direction for gradual development. Findings below record the initial inspection. Implemented follow-ups are tracked in the [development status](development-status.md). The active [engineering plan](../rocket-simulator-plan.md), [model to flight execution plan](../rocket-simulator-model-to-flight-plan.md), and ADR-0011 incorporate the subsequent shared-model direction and supersede the initial rollout sequence.
 
 ## Overall assessment
 
@@ -267,33 +267,50 @@ Preserve the ambitious long-term direction while correcting these decisions and 
 
 Review formula conventions and source identifiers as part of that cleanup. The master plan has inconsistent scalar-state counting and contains equations whose notation does not match the intended dimensional relationship. The Barrowman fixture should cite an audited report and exact pages/tables, rather than relying on its current unverified `SP-7224` label and incomplete values. NASA provides a copy of Barrowman's original work suitable for checking the bibliography and transcription. [NASA source](https://ntrs.nasa.gov/api/citations/20010047838/downloads/20010047838.pdf).
 
-## A gradual roadmap with evidence gates
+## Current roadmap with evidence gates
 
-These stages replace calendar confidence with demonstrable progress. Advance one coherent workflow at a time; numerical repair and verification should continue through the early product stages.
+The initial review recommended reliable documents and reproducible analysis
+before broader physics. Those increments now provide saved cases, retained
+runs, background jobs, comparisons and exports. Their implementation evidence
+is recorded in the [development status](development-status.md); numerical
+credibility findings above remain relevant.
 
-| Stage | Deliverable | Exit gate |
-|---|---|---|
-| **0 — Reconcile evidence and supported scope** | Capability inventory, corrected model contracts, targeted solver defects, validation-case manifest, declared initial operating envelope | Every advertised capability maps to an integrated path and an evidence status. Unsupported inputs produce explicit outcomes. Numerical findings above have focused regressions and dispositions. |
-| **1 — Reliable engineering documents** | Application command layer, undo/redo, semantic validation, safe save/recovery, compatible schema migration, saved cases | Create/edit/undo/reopen preserves a project and its cases. Interrupted saves preserve the previous file. Invalid references and unsupported versions are explained consistently in GUI and CLI. |
-| **2 — Professional vehicle modeling workflow** | Vehicle configurations, named assembly, 2D/3D inspection, units, installation references, measured mass/CG/inertia inputs, coefficient-data inspection, reusable controls | Engineers configure the reference vehicle using explicit model sources and reference conventions; geometry, measured overrides, and analysis annotations remain consistent. Review the framework against measured interaction results. |
-| **3 — Reproducible runs and engineering review** | Local workers, cancellation, simulation CLI, immutable run records, named quantities/criteria, baseline comparisons, linked plots, event timeline, review export | A nominal case and variations run without freezing editing; criterion results and comparisons survive reopening; a second engineer reproduces the study; failure and cancellation cannot appear as successful flights. |
-| **4 — Professional release within a defined flight regime** | Converged single-body solver, physical mass/propulsion/recovery models, imported-data contracts, independent reference panel, published limitations and validation report | Meet predeclared accuracy criteria on specified cases, without tuning against the evaluation set. Demonstrate that error is acceptable for the intended use. |
-| **5 — Studies and uncertainty** | Parameter sweeps first; deterministic sampling, uncertainty inputs, retained failures, sensitivity and dispersion views | Repeatable sample sets, reported failure rates, convergence evidence, and physically meaningful uncertainty summaries. Add optimization only after its objectives and constraints are trusted. |
-| **6 — Expand one advanced regime** | Choose one need: staging, a validated transonic/supersonic envelope, or controls integration | Each increment has suitable inputs, explicit events/interfaces, its own validation panel, and reviewable results. Reassess before attempting a general sounding-rocket tier. |
-| **7 — Broader organizational use** | Review bundles, baseline comparisons, release/support policy, reproducible installers, required integrations; shared repositories only if demanded | Another team member can reproduce and review a study using a supported release. Add access control, central job services, or institutional integrations only for an identified deployment need. |
+The updated product direction connects one versioned vehicle/plant/controller
+package to nonlinear simulation, automatic linearization, controller C/SIL,
+GPU Monte Carlo, HIL and measured-data reconciliation. The canonical sequence
+and acceptance criteria are M0–M5 in the
+[model to flight execution plan](../rocket-simulator-model-to-flight-plan.md#10-delivery-gates-and-first-work-packages).
+This replaces the initial review's longer numbered rollout table.
 
-Desktop delivery is a cross-cutting requirement: retain quick Linux checks, add Windows/macOS build and launch smoke tests, and exercise renderer/input behavior on representative GPU backends before claiming equivalent support. Add dependency/asset provenance and migration compatibility to release review. These measures support the native desktop promise already in the plan.
+Retain Rust as the production workspace while a bounded spike compares shared
+graph/AD/generation approaches, including optional Julia tooling. A parameter
+file is insufficient: timing, discrete state, units/frames, observations,
+backend capabilities and build identity must be part of the contract. One
+controlled rocket, board, log adapter and pilot-selected external host establish
+the workflow before broader launcher/orbital regimes or universal integration.
+
+The competitive opportunity is coherent workflow and evidence across these
+stages. Existing open tools already cover substantial parts: Basilisk documents
+HIL, repeatable Monte Carlo and flight-data analysis; OpenModelica exports FMI
+models. Position Aether through the concrete rocket workflow and pilot results,
+rather than an unsupported claim that no open solution exists.
+[Basilisk](https://avslab.github.io/basilisk/),
+[OpenModelica FMI](https://openmodelica.org/doc/OpenModelicaUsersGuide/latest/fmitlm.html).
 
 ## Immediate recommendations
 
-The next three implementation changes should be small enough to review independently:
+1. Repair installed propulsion mass/CG/inertia and aerodynamic moment/rate
+   conventions with independent fixtures. The new analysis features inherit
+   these physical assumptions until the M0 findings are resolved.
+2. Extract pure plant/observation and sampled controller interfaces with explicit
+   state, reset, units, frames and deterministic timing. Preserve project/run
+   compatibility while establishing those contracts.
+3. Execute the small shared-model/backend spike, then build linearization,
+   controller C/SIL, CPU ensembles and initial telemetry replay into the first
+   developer preview. Gate GPU acceleration, board HIL and reconciliation on
+   their distinct correctness, timing and held-out evidence.
 
-1. **Evidence inventory and one solver correction:** map existing tests to the promised gates, add a recovery-force/terminal-velocity regression with an analytical tolerance, and correct the recovery force/state path. Track mass, motor placement, and moment-reference fixes as separate follow-ups.
-2. **One undoable editing path:** introduce an application module for a body-tube dimension edit, including validation, revision tracking, undo, and redo. Prove the boundary with that operation before migrating every editor action.
-3. **Safe persistence for the current document:** add atomic saving and explicit schema-version checking, with failure-path tests preserving the previous file. Keep the current design format usable while planning case persistence.
-
-Then add one saved simulation case, one background job, and one retained run record in separate changes. Use two such runs to build the first comparison view. This sequence exposes architectural mistakes while their correction is still inexpensive.
-
-Keep each proposal narrow enough to review and release independently. Maintain a working reference project through every step. Use that project to demonstrate the whole workflow, while keeping independent validation datasets separate.
-
-The decisions to settle before advanced-model expansion are the first professional workflow and flight envelope, the independently sourced validation panel, and the study bundle needed by a reviewing engineer. Those choices provide a firmer basis for slow, durable progress than adding another solver feature or another visual theme.
+Continue native desktop usability, accessibility and large-result checks as
+new engineering views become usable. Model generation, physical validation,
+GPU equivalence, HIL timing and successful parameter fitting answer different
+questions; the review bundle must preserve which evidence supports each claim.

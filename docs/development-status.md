@@ -224,13 +224,39 @@ The earlier rejected mesh exposed small-cell quality defects; the adapter also
 required a fix so OpenFOAM environment setup receives no solver arguments.
 Both failures informed the final checks rather than being treated as success.
 
+## Adopted model to flight direction
+
+The [engineering plan](../rocket-simulator-plan.md) and
+[execution plan](../rocket-simulator-model-to-flight-plan.md) now prioritize a
+shared model across CPU simulation/linearization, generated controller C,
+GPU ensembles, HIL and measured-data replay/reconciliation. This is a roadmap
+change; these capabilities are not implemented by the analysis/CFD increment.
+Existing simulated telemetry export is not measured-flight replay, wgpu viewport
+rendering is not GPU Monte Carlo, and a data-only vehicle file is not a compiler.
+
+| Capability | Current implementation status | Planned gate |
+|---|---|---|
+| Declarative multi-target model and typed graph | Vehicle/case JSON exists; shared plant/controller graph and compiler do not | M0–M1 |
+| Automatic linearization and trim | Not implemented; independent derivative/perturbation cases required | M2 |
+| Controller C generation and compiled SIL | Not implemented; sampled controller, actuator and sensor interfaces required | M1 spike, M2 preview |
+| CPU/GPU Monte Carlo | Monte Carlo crate scaffolding; no integrated ensemble backend | M2 CPU, M3 GPU |
+| HIL | No scheduler/transport/board integration | M4 |
+| Measured telemetry replay and reconciliation | Simulated run JSON/CSV exists; measured-log mapping, observation comparison and calibration workflow do not | M2 initial replay, M5 reconciliation |
+| External Trick/FMI/dSPACE integration | Not implemented; select one external pilot target | M5 |
+
 ## Next increments
 
-1. Resolve installed propulsion mass/CG/inertia and aerodynamic conventions with
-   independent verification cases before broader accuracy claims.
-2. Add multiple editable named cases, run removal/archive, criteria, and sweeps.
-3. Add CFD boundary-layer meshing, mesh/domain studies, and an independently
-   validated operating-envelope dataset before using it for design verification.
+1. Repair installed propulsion mass/CG/inertia and verify aerodynamic force,
+   moment and rate conventions using independent fixtures (M0).
+2. Extract shared plant/observation and sampled controller interfaces, including
+   units, frames, explicit state/reset and deterministic scheduling contracts.
+3. Run the bounded Rust/Julia shared-model/backend spike (M1), then deliver
+   automatic linearization, controller C/SIL, CPU ensembles and initial replay
+   as the first developer preview (M2).
+
+Multiple named cases, run archive/removal and criteria grow with these workflows.
+CFD boundary-layer meshing, mesh/domain studies and independently validated
+coefficient data remain a separate evidence backlog driven by pilot needs.
 
 Numerical follow-ups remain high priority: installed motor location and loaded
 mass/CG/inertia, geometry-specific mass properties, aerodynamic moment reference,

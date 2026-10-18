@@ -1,6 +1,12 @@
 # Phase 1 — Design Editor — Plan & Task List
 
-**Status:** Ready for execution
+> **Current direction:** The [engineering plan](rocket-simulator-plan.md) and
+> [model to flight execution plan](rocket-simulator-model-to-flight-plan.md)
+> supersede this document's priority order, estimates and release sequence.
+> Retain these tasks as technical history; phase completion does not establish
+> the current validation or model-to-flight gates.
+
+**Status:** Historical phase task inventory; current sequencing is M0–M5
 **Estimated duration:** 4 weeks (one focused engineer)
 **Goal:** A user can build a complete model rocket visually and see live CG/CP readouts.
 
